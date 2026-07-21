@@ -245,14 +245,19 @@
   }
 
   async function handlePlayerResponse(payload) {
-    state.lastPlayerResponse = payload;
-
     if (!state.settings.subtitleEnabled) {
       setStatus("");
       return;
     }
 
     const videoId = String(payload.videoId || "");
+    const urlVideoId = getUrlVideoId();
+    if (urlVideoId && videoId && videoId !== urlVideoId) {
+      requestPlayerResponse();
+      return;
+    }
+
+    state.lastPlayerResponse = payload;
     const tracks = Array.isArray(payload.captionTracks) ? payload.captionTracks : [];
     const transcript = payload.transcript || null;
     const track = selectSourceTrack(tracks);
@@ -1168,7 +1173,38 @@
     return video.currentTime * 1000;
   }
 
+  function getUrlVideoId() {
+    try {
+      return new URL(window.location.href).searchParams.get("v") || "";
+    } catch (error) {
+      return "";
+    }
+  }
+
+  function syncVideoWithLocation() {
+    const urlVideoId = getUrlVideoId();
+    if (!urlVideoId || urlVideoId === state.videoId) {
+      return;
+    }
+
+    const transcript =
+      state.transcript ||
+      (state.lastPlayerResponse && state.lastPlayerResponse.transcript) ||
+      null;
+    const trackFingerprint = makeStableTrackFingerprint(urlVideoId, null, transcript);
+
+    resetVideoState(urlVideoId, null, trackFingerprint, transcript);
+    state.lastPlayerResponse = null;
+    setStatus("正在切换视频并读取字幕...");
+    requestPlayerResponse();
+
+    if (hasTranscriptApi(transcript)) {
+      loadCaptionTrack(urlVideoId, null, trackFingerprint, transcript);
+    }
+  }
+
   function renderLoop() {
+    syncVideoWithLocation();
     ensureOverlay();
     updateNativeCaptionBlocking();
     updateOverlay();

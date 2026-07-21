@@ -18,8 +18,22 @@
   }
 
   function readPlayerResponse() {
+    const candidates = [];
+    const player = document.querySelector("#movie_player");
+
+    try {
+      if (player && typeof player.getPlayerResponse === "function") {
+        const response = player.getPlayerResponse();
+        if (response) {
+          candidates.push(response);
+        }
+      }
+    } catch (error) {
+      // The internal player API can be temporarily unavailable during navigation.
+    }
+
     if (window.ytInitialPlayerResponse) {
-      return window.ytInitialPlayerResponse;
+      candidates.push(window.ytInitialPlayerResponse);
     }
 
     const raw = window.ytplayer &&
@@ -29,13 +43,32 @@
 
     if (typeof raw === "string") {
       try {
-        return JSON.parse(raw);
+        candidates.push(JSON.parse(raw));
       } catch (error) {
-        return null;
+        // Ignore malformed or temporarily incomplete player configuration.
       }
+    } else if (raw) {
+      candidates.push(raw);
     }
 
-    return null;
+    const currentVideoId = readUrlVideoId();
+    if (currentVideoId) {
+      return candidates.find((response) => responseVideoId(response) === currentVideoId) || null;
+    }
+
+    return candidates[0] || null;
+  }
+
+  function readUrlVideoId() {
+    try {
+      return new URL(window.location.href).searchParams.get("v") || "";
+    } catch (error) {
+      return "";
+    }
+  }
+
+  function responseVideoId(response) {
+    return String(response && response.videoDetails && response.videoDetails.videoId || "");
   }
 
   function readYtcfgValue(name) {
