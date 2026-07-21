@@ -129,7 +129,7 @@
     }
   }
 
-  function emitPlayerResponse() {
+  function emitPlayerResponse(force) {
     const response = readPlayerResponse();
     const tracks =
       response &&
@@ -148,6 +148,7 @@
 
     const sanitizedTracks = Array.isArray(tracks) ? tracks.map(sanitizeTrack) : [];
     const transcriptParams = findTranscriptParams(window.ytInitialData, 0);
+    const innertubeApiKey = readYtcfgValue("INNERTUBE_API_KEY") || "";
     const innertubeContext =
       readYtcfgValue("INNERTUBE_CONTEXT") ||
       {
@@ -160,8 +161,8 @@
         }
       };
 
-    const signature = `${videoId}:${sanitizedTracks.map((track) => track.baseUrl).join("|")}:${transcriptParams}`;
-    if (signature === lastSignature) {
+    const signature = `${videoId}:${sanitizedTracks.map((track) => track.baseUrl).join("|")}:${transcriptParams}:${innertubeApiKey}`;
+    if (!force && signature === lastSignature) {
       return;
     }
 
@@ -175,7 +176,7 @@
         captionTracks: sanitizedTracks,
         transcript: {
           params: transcriptParams,
-          apiKey: readYtcfgValue("INNERTUBE_API_KEY") || "",
+          apiKey: innertubeApiKey,
           context: innertubeContext,
           clientName: readYtcfgValue("INNERTUBE_CLIENT_NAME") || "",
           clientVersion: readYtcfgValue("INNERTUBE_CLIENT_VERSION") || "",
@@ -196,6 +197,8 @@
     const data = event.data;
     if (data && data.channel === CHANNEL && data.type === "DISABLE_NATIVE_CAPTIONS") {
       disableNativeCaptions();
+    } else if (data && data.channel === CHANNEL && data.type === "REQUEST_PLAYER_RESPONSE") {
+      emitPlayerResponse(true);
     }
   });
   document.addEventListener("readystatechange", emitPlayerResponse);
