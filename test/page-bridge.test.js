@@ -8,7 +8,10 @@ test("page bridge resends an unchanged player response when the content script r
   const listeners = new Map();
   const postedMessages = [];
   const window = {
-    location: { origin: "https://www.youtube.com" },
+    location: {
+      origin: "https://www.youtube.com",
+      href: "https://www.youtube.com/watch?v=video-1"
+    },
     ytInitialPlayerResponse: {
       videoDetails: { videoId: "video-1", title: "Test video" },
       captions: {
@@ -47,6 +50,7 @@ test("page bridge resends an unchanged player response when the content script r
 
   const source = fs.readFileSync(path.join(__dirname, "../src/page-bridge.js"), "utf8");
   vm.runInNewContext(source, {
+    URL,
     document,
     window,
     setInterval() {},
@@ -68,4 +72,63 @@ test("page bridge resends an unchanged player response when the content script r
   assert.equal(postedMessages.length, 2);
   assert.deepEqual(postedMessages[1].captionTracks, postedMessages[0].captionTracks);
   assert.equal(postedMessages[1].transcript.apiKey, "test-key");
+});
+
+test("page bridge prefers the current player response after SPA navigation", () => {
+  const postedMessages = [];
+  const currentResponse = {
+    videoDetails: { videoId: "video-2", title: "Second video" },
+    captions: {
+      playerCaptionsTracklistRenderer: {
+        captionTracks: [
+          {
+            baseUrl: "https://www.youtube.com/api/timedtext?v=video-2&lang=en",
+            languageCode: "en",
+            name: { simpleText: "English" }
+          }
+        ]
+      }
+    }
+  };
+  const window = {
+    location: {
+      origin: "https://www.youtube.com",
+      href: "https://www.youtube.com/watch?v=video-2"
+    },
+    ytInitialPlayerResponse: {
+      videoDetails: { videoId: "video-1", title: "First video" }
+    },
+    addEventListener() {},
+    postMessage(message) {
+      postedMessages.push(message);
+    }
+  };
+  const document = {
+    addEventListener() {},
+    querySelector(selector) {
+      if (selector === "#movie_player") {
+        return {
+          getPlayerResponse() {
+            return currentResponse;
+          }
+        };
+      }
+      return null;
+    }
+  };
+
+  const source = fs.readFileSync(path.join(__dirname, "../src/page-bridge.js"), "utf8");
+  vm.runInNewContext(source, {
+    URL,
+    document,
+    window,
+    setInterval() {},
+    setTimeout(callback) {
+      callback();
+    }
+  });
+
+  assert.equal(postedMessages.length, 1);
+  assert.equal(postedMessages[0].videoId, "video-2");
+  assert.equal(postedMessages[0].captionTracks[0].languageCode, "en");
 });
