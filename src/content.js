@@ -79,8 +79,8 @@
   async function init() {
     await loadSettings();
     applySettings();
-    injectPageBridge();
     bindPageMessages();
+    injectPageBridge();
     bindStorageChanges();
     startNativeCaptionBlocker();
     setInterval(watchVideoElement, 1000);
@@ -212,8 +212,21 @@
     const script = document.createElement("script");
     script.src = chrome.runtime.getURL("src/page-bridge.js");
     script.async = false;
-    script.onload = () => script.remove();
+    script.onload = () => {
+      script.remove();
+      requestPlayerResponse();
+    };
     root.appendChild(script);
+  }
+
+  function requestPlayerResponse() {
+    window.postMessage(
+      {
+        channel: CHANNEL,
+        type: "REQUEST_PLAYER_RESPONSE"
+      },
+      window.location.origin
+    );
   }
 
   function bindPageMessages() {
