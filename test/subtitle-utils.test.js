@@ -267,6 +267,126 @@ test("mergeCaptionFragments still breaks at soft limits for complete phrases", (
   assert.equal(merged.length, 2);
 });
 
+test("sentence segmentation input isolates a trailing partial sentence", () => {
+  const cues = Core.splitCaptionCuesAtSentenceBoundaries([
+    {
+      id: "0",
+      startMs: 1000,
+      endMs: 7000,
+      sourceText: "Multiplicative constants do not help. For example, if n"
+    },
+    {
+      id: "1",
+      startMs: 7100,
+      endMs: 9000,
+      sourceText: "doubles, then 8n will also double."
+    }
+  ]);
+
+  assert.equal(cues.length, 3);
+  assert.equal(cues[0].sourceText, "Multiplicative constants do not help.");
+  assert.equal(cues[1].sourceText, "For example, if n");
+  assert.equal(cues[2].sourceText, "doubles, then 8n will also double.");
+  assert.equal(cues[0].id, "0");
+  assert.equal(cues[2].id, "2");
+  assert.equal(cues[0].startMs, 1000);
+  assert.equal(cues[1].endMs, 7000);
+  assert.equal(cues[2].startMs, 7100);
+});
+
+test("LLM sentence segmentation rejoins a sentence split across local cues", () => {
+  const cues = [
+    {
+      id: "0",
+      startMs: 1000,
+      endMs: 4000,
+      sourceText: "For example, if n",
+      displaySourceText: "For example, if n.",
+      translatedText: "",
+      status: "pending"
+    },
+    {
+      id: "1",
+      startMs: 4100,
+      endMs: 7000,
+      sourceText: "doubles, then 8n will also double.",
+      displaySourceText: "Doubles, then 8n will also double.",
+      translatedText: "",
+      status: "pending"
+    },
+    {
+      id: "2",
+      startMs: 7200,
+      endMs: 9000,
+      sourceText: "That is the next idea.",
+      displaySourceText: "That is the next idea.",
+      translatedText: "",
+      status: "pending"
+    }
+  ];
+  const groups = Core.parseSentenceSegmentationContent(
+    JSON.stringify({
+      groups: [
+        {
+          startId: "0",
+          endId: "1",
+          displaySourceText: "For example, if n doubles, then 8n will also double."
+        },
+        {
+          startId: "2",
+          endId: "2",
+          displaySourceText: "That is the next idea."
+        }
+      ]
+    }),
+    cues
+  );
+  const segmented = Core.applySentenceSegmentationGroups(cues, groups);
+
+  assert.equal(segmented.length, 2);
+  assert.equal(segmented[0].startMs, 1000);
+  assert.equal(segmented[0].endMs, 7000);
+  assert.equal(
+    segmented[0].sourceText,
+    "For example, if n doubles, then 8n will also double."
+  );
+  assert.equal(
+    segmented[0].displaySourceText,
+    "For example, if n doubles, then 8n will also double."
+  );
+  assert.equal(segmented[1].id, "1");
+});
+
+test("LLM sentence segmentation rejects gaps in cue coverage", () => {
+  const cues = [
+    { id: "0", startMs: 0, endMs: 1000, sourceText: "First" },
+    { id: "1", startMs: 1000, endMs: 2000, sourceText: "second" }
+  ];
+
+  assert.throws(
+    () =>
+      Core.parseSentenceSegmentationContent(
+        '{"groups":[{"startId":"1","endId":"1","displaySourceText":"Second."}]}',
+        cues
+      ),
+    /cover consecutive cue ids/i
+  );
+});
+
+test("LLM sentence segmentation ignores display text that changes source words", () => {
+  const cues = [
+    { id: "0", startMs: 0, endMs: 1000, sourceText: "Keep every word" }
+  ];
+  const groups = Core.parseSentenceSegmentationContent(
+    '{"groups":[{"startId":"0","endId":"0","displaySourceText":"Invent different words."}]}',
+    cues
+  );
+  const segmented = Core.applySentenceSegmentationGroups(cues, groups);
+
+  assert.equal(groups[0].displaySourceText, undefined);
+  assert.equal(segmented[0].displaySourceText, "Keep every word.");
+});
+
 test("findCueAtTime returns the active cue by binary search", () => {
   const cues = [
     { startMs: 0, endMs: 1000, sourceText: "A" },
@@ -325,6 +445,10 @@ test("resolveTranslationConfig keeps old DeepSeek API key compatible", () => {
 
 test("default settings enable ASR correction", () => {
   assert.equal(Core.DEFAULT_SETTINGS.asrCorrectionEnabled, true);
+});
+
+test("default settings enable LLM sentence segmentation", () => {
+  assert.equal(Core.DEFAULT_SETTINGS.llmSentenceSegmentationEnabled, true);
 });
 
 test("resolveTranslationConfig supports custom OpenAI-compatible API", () => {

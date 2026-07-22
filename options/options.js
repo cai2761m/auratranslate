@@ -6,6 +6,7 @@
   const settingsToggle = document.querySelector("#settings-toggle");
   const realtimeApi = createApiFields("");
   const immersiveApi = createApiFields("immersive");
+  const llmSentenceSegmentationEnabled = document.querySelector("#llmSentenceSegmentationEnabled");
   const asrCorrectionEnabled = document.querySelector("#asrCorrectionEnabled");
   const sourceLanguage = document.querySelector("#sourceLanguage");
   const targetLanguage = document.querySelector("#targetLanguage");
@@ -26,6 +27,9 @@
     hydrateApiFields(realtimeApi, settings, "realtime");
     hydrateApiFields(immersiveApi, settings, "immersive");
 
+    if (llmSentenceSegmentationEnabled) {
+      llmSentenceSegmentationEnabled.checked = settings.llmSentenceSegmentationEnabled !== false;
+    }
     if (asrCorrectionEnabled) {
       asrCorrectionEnabled.checked = settings.asrCorrectionEnabled !== false;
     }
@@ -135,6 +139,7 @@
       immersiveTranslationBaseUrl: useDedicatedImmersiveApi ? immersive.baseUrl : "",
       immersiveTranslationModel: useDedicatedImmersiveApi ? immersive.model : "",
       immersiveTranslationJsonResponse: useDedicatedImmersiveApi ? immersive.jsonResponse : true,
+      llmSentenceSegmentationEnabled: readChecked(llmSentenceSegmentationEnabled, true),
       asrCorrectionEnabled: readChecked(asrCorrectionEnabled, true),
       sourceLanguage: readValue(sourceLanguage, Core.DEFAULT_SETTINGS.sourceLanguage),
       targetLanguage: readValue(targetLanguage, Core.DEFAULT_SETTINGS.targetLanguage),

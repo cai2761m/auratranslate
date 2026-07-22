@@ -125,8 +125,13 @@
               <div class="section-heading">
                 <p class="section-kicker">General</p>
                 <h2>通用设置</h2>
-                <p>控制语言、字幕大小、ASR 纠错和字幕开关。</p>
+                <p>控制语言、LLM 智能断句、字幕大小、ASR 纠错和字幕开关。</p>
               </div>
+
+              <label class="toggle">
+                <input id="llmSentenceSegmentationEnabled" type="checkbox">
+                <span>启用 LLM 智能断句，先合并跨字幕的完整句子再翻译（默认开启）</span>
+              </label>
 
               <label class="toggle">
                 <input id="asrCorrectionEnabled" type="checkbox">

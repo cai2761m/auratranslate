@@ -18,6 +18,7 @@
     fontScale: 1,
     subtitleEnabled: true,
     subtitlePosition: null,
+    llmSentenceSegmentationEnabled: true,
     asrCorrectionEnabled: true,
     cacheVersion: "1",
     translationCacheMaxItems: 2000
@@ -25,7 +26,8 @@
 
   const DEEPSEEK_MODEL = "deepseek-v4-flash";
   const GEMINI_MODEL = "gemini-3.5-flash";
-  const MERGE_VERSION = "4";
+  const MERGE_VERSION = "5";
+  const SENTENCE_SEGMENTATION_VERSION = "1";
   const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
   const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 
@@ -67,7 +69,7 @@
   const TRANSLATION_FATAL_RE =
     /API Key|not configured|base URL|model|401|403|quota|insufficient/i;
   const TRANSLATION_RETRYABLE_RE =
-    /429|rate limit|too many requests|timeout|aborted|network|failed to fetch|non-JSON|invalid translation JSON|JSON at position|Unexpected .*JSON|Expected .*JSON|empty content|did not contain usable translations|truncated|finish_reason|request failed \(5\d\d\)/i;
+    /429|rate limit|too many requests|timeout|aborted|network|failed to fetch|non-JSON|invalid translation JSON|invalid sentence segmentation JSON|sentence segmentation (?:did not|groups must|group ids must)|JSON at position|Unexpected .*JSON|Expected .*JSON|empty content|did not contain usable translations|truncated|finish_reason|request failed \(5\d\d\)/i;
 
   function classifyTranslationError(message) {
     const text = String(message || "");
@@ -274,6 +276,12 @@
       .replace(TAG_RE, " ")
       .replace(/\s+/g, " ")
       .trim();
+  }
+
+  function subtitleContentSignature(value) {
+    return normalizeSubtitleText(value)
+      .toLocaleLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, "");
   }
 
   function cleanDisplayWord(value) {
@@ -811,6 +819,218 @@
     return merged.map((cue, index) => Object.assign({}, cue, { id: String(index) }));
   }
 
+  function splitCaptionCuesAtSentenceBoundaries(cues) {
+    const result = [];
+    const sentenceEndPattern = /[.!?。！？]+["')\]]*(?=\s+|$)/g;
+
+    for (const cue of Array.isArray(cues) ? cues : []) {
+      const sourceText = normalizeSubtitleText(cue && cue.sourceText);
+      const startMs = Number(cue && cue.startMs);
+      const endMs = Number(cue && cue.endMs);
+      if (!sourceText || !Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+        continue;
+      }
+
+      const parts = [];
+      let sourceOffset = 0;
+      sentenceEndPattern.lastIndex = 0;
+      let match;
+      while ((match = sentenceEndPattern.exec(sourceText))) {
+        const endOffset = match.index + match[0].length;
+        const text = sourceText.slice(sourceOffset, endOffset).trim();
+        if (text) {
+          parts.push({ text, startOffset: sourceOffset, endOffset });
+        }
+        sourceOffset = endOffset;
+        while (/\s/.test(sourceText[sourceOffset] || "")) {
+          sourceOffset += 1;
+        }
+      }
+      const remainder = sourceText.slice(sourceOffset).trim();
+      if (remainder) {
+        parts.push({ text: remainder, startOffset: sourceOffset, endOffset: sourceText.length });
+      }
+      if (!parts.length) {
+        parts.push({ text: sourceText, startOffset: 0, endOffset: sourceText.length });
+      }
+
+      const durationMs = endMs - startMs;
+      let previousPartEndMs = startMs;
+      for (let index = 0; index < parts.length; index += 1) {
+        const part = parts[index];
+        const partStartMs = previousPartEndMs;
+        const estimatedEndMs =
+          index === parts.length - 1
+            ? endMs
+            : startMs + Math.round((durationMs * part.endOffset) / sourceText.length);
+        const remainingParts = parts.length - index - 1;
+        const latestEndMs = endMs - remainingParts;
+        const partEndMs = Math.max(
+          partStartMs + 1,
+          Math.min(latestEndMs, estimatedEndMs)
+        );
+        result.push({
+          id: String(result.length),
+          startMs: partStartMs,
+          endMs: Math.max(partStartMs + 1, partEndMs),
+          sourceText: part.text,
+          displaySourceText: formatDisplaySourceText(part.text),
+          translatedText: "",
+          status: "pending"
+        });
+        previousPartEndMs = partEndMs;
+      }
+    }
+
+    return result;
+  }
+
+  function parseSentenceSegmentationContent(content, cues) {
+    let parsed;
+    try {
+      parsed = parseLooseJsonContent(content);
+    } catch (error) {
+      throw new Error(
+        `Invalid sentence segmentation JSON: ${error && error.message ? error.message : String(error)}`
+      );
+    }
+
+    const sourceCues = Array.isArray(cues) ? cues : [];
+    const sourceIds = sourceCues.map((cue) => String(cue && cue.id != null ? cue.id : ""));
+    const idToIndex = new Map(sourceIds.map((id, index) => [id, index]));
+    const list = Array.isArray(parsed)
+      ? parsed
+      : parsed && Array.isArray(parsed.groups)
+        ? parsed.groups
+        : parsed && Array.isArray(parsed.items)
+          ? parsed.items
+          : parsed && Array.isArray(parsed.segments)
+            ? parsed.segments
+            : [];
+
+    if (!sourceCues.length || !list.length) {
+      throw new Error("Sentence segmentation did not contain usable groups.");
+    }
+
+    const groups = [];
+    let expectedStartIndex = 0;
+    for (const item of list) {
+      const ids = item && Array.isArray(item.ids) ? item.ids.map(String) : [];
+      const startId = String(
+        item && (item.startId != null ? item.startId : item.start_id != null ? item.start_id : ids[0])
+      );
+      const endId = String(
+        item &&
+          (item.endId != null
+            ? item.endId
+            : item.end_id != null
+              ? item.end_id
+              : ids.length
+                ? ids[ids.length - 1]
+                : startId)
+      );
+      const startIndex = idToIndex.get(startId);
+      const endIndex = idToIndex.get(endId);
+
+      if (
+        !Number.isInteger(startIndex) ||
+        !Number.isInteger(endIndex) ||
+        startIndex !== expectedStartIndex ||
+        endIndex < startIndex
+      ) {
+        throw new Error("Sentence segmentation groups must cover consecutive cue ids in order.");
+      }
+
+      if (ids.length) {
+        const expectedIds = sourceIds.slice(startIndex, endIndex + 1);
+        if (ids.length !== expectedIds.length || ids.some((id, index) => id !== expectedIds[index])) {
+          throw new Error("Sentence segmentation group ids must be consecutive.");
+        }
+      }
+
+      const rawDisplaySourceText = normalizeSubtitleText(
+        item &&
+          (item.displaySourceText ||
+            item.punctuatedSourceText ||
+            item.sourceText ||
+            item.text ||
+            "")
+      );
+      const coveredSourceText = sourceCues
+        .slice(startIndex, endIndex + 1)
+        .map((cue) => cue.sourceText || "")
+        .join(" ");
+      const displaySourceText =
+        rawDisplaySourceText &&
+        subtitleContentSignature(rawDisplaySourceText) === subtitleContentSignature(coveredSourceText)
+          ? formatDisplaySourceText(rawDisplaySourceText)
+          : "";
+      const group = { startId, endId };
+      if (displaySourceText) {
+        group.displaySourceText = displaySourceText;
+      }
+      groups.push(group);
+      expectedStartIndex = endIndex + 1;
+    }
+
+    if (expectedStartIndex !== sourceCues.length) {
+      throw new Error("Sentence segmentation groups did not cover every cue id.");
+    }
+
+    return groups;
+  }
+
+  function applySentenceSegmentationGroups(cues, groups) {
+    const sourceCues = Array.isArray(cues) ? cues : [];
+    const sourceIds = sourceCues.map((cue) => String(cue && cue.id != null ? cue.id : ""));
+    const idToIndex = new Map(sourceIds.map((id, index) => [id, index]));
+    const result = [];
+    let expectedStartIndex = 0;
+
+    for (const group of Array.isArray(groups) ? groups : []) {
+      const startIndex = idToIndex.get(String(group && group.startId));
+      const endIndex = idToIndex.get(String(group && group.endId));
+      if (
+        !Number.isInteger(startIndex) ||
+        !Number.isInteger(endIndex) ||
+        startIndex !== expectedStartIndex ||
+        endIndex < startIndex
+      ) {
+        throw new Error("Cannot apply non-consecutive sentence segmentation groups.");
+      }
+
+      const groupCues = sourceCues.slice(startIndex, endIndex + 1);
+      const sourceText = normalizeSubtitleText(groupCues.map((cue) => cue.sourceText || "").join(" "));
+      if (!sourceText) {
+        throw new Error("Sentence segmentation produced an empty subtitle group.");
+      }
+
+      const proposedDisplaySourceText = normalizeSubtitleText(group && group.displaySourceText);
+      const safeDisplaySourceText =
+        proposedDisplaySourceText &&
+        subtitleContentSignature(proposedDisplaySourceText) === subtitleContentSignature(sourceText)
+          ? proposedDisplaySourceText
+          : sourceText;
+
+      result.push({
+        id: String(result.length),
+        startMs: Number(groupCues[0].startMs),
+        endMs: Number(groupCues[groupCues.length - 1].endMs),
+        sourceText,
+        displaySourceText: formatDisplaySourceText(safeDisplaySourceText),
+        translatedText: "",
+        status: "pending"
+      });
+      expectedStartIndex = endIndex + 1;
+    }
+
+    if (expectedStartIndex !== sourceCues.length) {
+      throw new Error("Sentence segmentation groups did not cover every source cue.");
+    }
+
+    return result;
+  }
+
   function findCueAtTime(cues, timeMs) {
     if (!Array.isArray(cues) || !Number.isFinite(timeMs)) {
       return null;
@@ -1109,6 +1329,7 @@
     DEEPSEEK_BASE_URL,
     GEMINI_BASE_URL,
     MERGE_VERSION,
+    SENTENCE_SEGMENTATION_VERSION,
     DEFAULT_CACHE_MAX_ITEMS,
     decodeHtmlEntities,
     normalizeSubtitleText,
@@ -1123,6 +1344,9 @@
     parseYouTubeTranscriptResponse,
     findYouTubeTranscriptParams,
     mergeCaptionFragments,
+    splitCaptionCuesAtSentenceBoundaries,
+    parseSentenceSegmentationContent,
+    applySentenceSegmentationGroups,
     findCueAtTime,
     fingerprintText,
     makeCacheKey,
