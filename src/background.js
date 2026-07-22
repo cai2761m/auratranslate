@@ -3,6 +3,9 @@ importScripts("shared.js");
 const Core = globalThis.YTBTCore;
 const MAX_RETRIES = 2;
 const REQUEST_TIMEOUT_MS = 60000;
+const SEGMENTATION_BATCH_SIZE = 40;
+const MAX_SEGMENTATION_CARRY_CUES = 6;
+const MAX_SEGMENTATION_CACHE_ENTRIES = 40;
 const CACHE_PREFIX = "ytbt:";
 // In-memory count of cached cue translations so we usually avoid a full storage
 // scan on every write. Reset on service-worker restart; refreshed on demand.
@@ -23,6 +26,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           ok: false,
           videoId: message.videoId,
           items: [],
+          errors: [{ message: error && error.message ? error.message : String(error) }]
+        });
+      });
+
+    return true;
+  }
+
+  if (message.type === "SEGMENT_SUBTITLES") {
+    handleSegmentSubtitles(message)
+      .then(sendResponse)
+      .catch((error) => {
+        sendResponse({
+          type: "SEGMENT_SUBTITLES_RESULT",
+          ok: false,
+          videoId: message.videoId,
+          groups: [],
           errors: [{ message: error && error.message ? error.message : String(error) }]
         });
       });
@@ -60,11 +79,177 @@ function storageRemove(keys) {
   return new Promise((resolve) => chrome.storage.local.remove(keys, resolve));
 }
 
+async function handleSegmentSubtitles(message) {
+  const settings = await storageGet(Core.DEFAULT_SETTINGS);
+  const sourceLanguage = settings.sourceLanguage || Core.DEFAULT_SETTINGS.sourceLanguage;
+  const translationConfig = Core.resolveTranslationConfig(settings);
+  const cues = (Array.isArray(message.cues) ? message.cues : [])
+    .map((cue) => ({
+      id: cue && cue.id != null ? String(cue.id) : "",
+      sourceText: Core.normalizeSubtitleText(cue && cue.sourceText),
+      startMs: Number(cue && cue.startMs),
+      endMs: Number(cue && cue.endMs)
+    }))
+    .filter((cue) => cue.id && cue.sourceText);
+
+  if (!settings.llmSentenceSegmentationEnabled || !cues.length) {
+    return {
+      type: "SEGMENT_SUBTITLES_RESULT",
+      ok: true,
+      videoId: message.videoId,
+      groups: cues.map((cue) => ({ startId: cue.id, endId: cue.id })),
+      errors: []
+    };
+  }
+
+  if (!translationConfig.apiKey) {
+    throw new Error(`${translationConfig.providerLabel} API Key is not configured.`);
+  }
+
+  const endpointUrl =
+    translationConfig.apiStyle === "gemini"
+      ? translationConfig.generateContentUrl
+      : translationConfig.chatCompletionsUrl;
+  if (!endpointUrl || !translationConfig.model) {
+    throw new Error(`${translationConfig.providerLabel} base URL or model is not configured.`);
+  }
+
+  const inputFingerprint = Core.fingerprintText(
+    cues.map((cue) => `${cue.id}:${cue.startMs}:${cue.endMs}:${cue.sourceText}`).join("|")
+  );
+  const cacheKey = `ytbt:segments:${Core.fingerprintText([
+    message.videoId || "",
+    message.trackFingerprint || "",
+    inputFingerprint,
+    translationConfig.provider,
+    endpointUrl,
+    translationConfig.model,
+    sourceLanguage,
+    Core.SENTENCE_SEGMENTATION_VERSION,
+    settings.cacheVersion || "1"
+  ].join("|"))}`;
+  const cached = await storageGet({ [cacheKey]: null });
+  const cachedValue = cached[cacheKey];
+  if (
+    cachedValue &&
+    cachedValue.inputFingerprint === inputFingerprint &&
+    Array.isArray(cachedValue.groups)
+  ) {
+    try {
+      Core.applySentenceSegmentationGroups(cues, cachedValue.groups);
+      return {
+        type: "SEGMENT_SUBTITLES_RESULT",
+        ok: true,
+        videoId: message.videoId,
+        groups: cachedValue.groups,
+        cached: true,
+        errors: []
+      };
+    } catch (error) {
+      // Ignore malformed or stale segmentation cache and regenerate it below.
+    }
+  }
+
+  const groups = await segmentSubtitleCues({
+    translationConfig,
+    sourceLanguage,
+    cues
+  });
+  Core.applySentenceSegmentationGroups(cues, groups);
+  await persistSentenceSegmentationCache(
+    cacheKey,
+    {
+      kind: "sentence-segmentation",
+      inputFingerprint,
+      groups,
+      updatedAt: Date.now(),
+      provider: translationConfig.provider,
+      model: translationConfig.model,
+      sourceLanguage,
+      version: Core.SENTENCE_SEGMENTATION_VERSION
+    }
+  );
+
+  return {
+    type: "SEGMENT_SUBTITLES_RESULT",
+    ok: true,
+    videoId: message.videoId,
+    groups,
+    cached: false,
+    errors: []
+  };
+}
+
+async function segmentSubtitleCues({ translationConfig, sourceLanguage, cues }) {
+  const committedGroups = [];
+  let carryCues = [];
+  let cursor = 0;
+
+  while (cursor < cues.length) {
+    const nextCursor = Math.min(cues.length, cursor + SEGMENTATION_BATCH_SIZE);
+    const windowCues = carryCues.concat(cues.slice(cursor, nextCursor));
+    cursor = nextCursor;
+    const groups = await translateWithRetry({
+      translationConfig,
+      targetLanguage: "",
+      sourceLanguage,
+      asrCorrectionEnabled: false,
+      cues: windowCues,
+      mode: "segmentation"
+    });
+    const isFinalWindow = cursor >= cues.length;
+
+    if (isFinalWindow) {
+      committedGroups.push(...groups);
+      carryCues = [];
+      break;
+    }
+
+    const lastGroup = groups[groups.length - 1];
+    const carryStartIndex = windowCues.findIndex(
+      (cue) => String(cue.id) === String(lastGroup.startId)
+    );
+    const carryEndIndex = windowCues.findIndex(
+      (cue) => String(cue.id) === String(lastGroup.endId)
+    );
+    const nextCarry = windowCues.slice(carryStartIndex, carryEndIndex + 1);
+
+    if (nextCarry.length && nextCarry.length <= MAX_SEGMENTATION_CARRY_CUES) {
+      committedGroups.push(...groups.slice(0, -1));
+      carryCues = nextCarry;
+    } else {
+      committedGroups.push(...groups);
+      carryCues = [];
+    }
+  }
+
+  return committedGroups;
+}
+
+async function persistSentenceSegmentationCache(cacheKey, cacheValue) {
+  await storageSet({ [cacheKey]: cacheValue });
+  const all = await storageGet(null);
+  const entries = Object.keys(all)
+    .filter((key) => key.startsWith("ytbt:segments:") && key !== cacheKey)
+    .map((key) => ({
+      key,
+      updatedAt: Number(all[key] && all[key].updatedAt) || 0
+    }))
+    .sort((left, right) => right.updatedAt - left.updatedAt);
+  const staleKeys = entries
+    .slice(Math.max(0, MAX_SEGMENTATION_CACHE_ENTRIES - 1))
+    .map((entry) => entry.key);
+  if (staleKeys.length) {
+    await storageRemove(staleKeys);
+  }
+}
+
 async function handleTranslateBatch(message) {
   const settings = await storageGet(Core.DEFAULT_SETTINGS);
   const targetLanguage = settings.targetLanguage || Core.DEFAULT_SETTINGS.targetLanguage;
   const sourceLanguage = settings.sourceLanguage || Core.DEFAULT_SETTINGS.sourceLanguage;
   const asrCorrectionEnabled = settings.asrCorrectionEnabled !== false;
+  const llmSentenceSegmentationEnabled = settings.llmSentenceSegmentationEnabled !== false;
   const translationConfig = Core.resolveTranslationConfig(settings);
 
   if (!translationConfig.apiKey) {
@@ -111,18 +296,36 @@ async function handleTranslateBatch(message) {
     Core.MERGE_VERSION,
     settings.cacheVersion || "1"
   ]);
-  const cacheKey = Core.makeCacheKey(asrCorrectionEnabled ? correctedCacheKeyParts : legacyCacheKeyParts);
+  const segmentedCacheKeyParts = legacyCacheKeyParts.slice(0, 5).concat([
+    sourceLanguage,
+    targetLanguage,
+    asrCorrectionEnabled ? "asr-correction-on" : "asr-correction-off",
+    "llm-sentence-segmentation-on",
+    Core.SENTENCE_SEGMENTATION_VERSION,
+    Core.MERGE_VERSION,
+    settings.cacheVersion || "1"
+  ]);
+  const cacheKey = Core.makeCacheKey(
+    llmSentenceSegmentationEnabled
+      ? segmentedCacheKeyParts
+      : asrCorrectionEnabled
+        ? correctedCacheKeyParts
+        : legacyCacheKeyParts
+  );
 
   const cache = await storageGet({ [cacheKey]: { items: {}, updatedAt: 0 } });
   const cacheValue = cache[cacheKey] || { items: {} };
   const cachedItems = [];
   const missingCues = [];
+  const sourceTextById = new Map();
 
   for (const cue of cues) {
     const id = cue && cue.id != null ? String(cue.id) : "";
     if (!id) {
       continue;
     }
+    const sourceText = Core.normalizeSubtitleText(cue.sourceText || cue.displaySourceText || "");
+    sourceTextById.set(id, sourceText);
     const cachedValue = cacheValue.items && cacheValue.items[id];
     const cachedText =
       typeof cachedValue === "string"
@@ -130,7 +333,12 @@ async function handleTranslateBatch(message) {
         : cachedValue != null && typeof cachedValue === "object"
           ? cachedValue.translatedText
           : "";
-    if (cachedText) {
+    const cachedSourceFingerprint =
+      cachedValue && typeof cachedValue === "object" ? cachedValue.sourceFingerprint : "";
+    const sourceMatchesCache =
+      !llmSentenceSegmentationEnabled ||
+      cachedSourceFingerprint === Core.fingerprintText(sourceText);
+    if (cachedText && sourceMatchesCache) {
       const cachedItem = { id, translatedText: cachedText, cached: true };
       if (cachedValue && typeof cachedValue === "object" && cachedValue.displaySourceText) {
         cachedItem.displaySourceText = cachedValue.displaySourceText;
@@ -139,7 +347,7 @@ async function handleTranslateBatch(message) {
     } else {
       missingCues.push({
         id,
-        sourceText: Core.normalizeSubtitleText(cue.sourceText || cue.displaySourceText || "")
+        sourceText
       });
     }
   }
@@ -166,9 +374,17 @@ async function handleTranslateBatch(message) {
 
   const mergedCacheItems = Object.assign({}, cacheValue.items || {});
   for (const item of translatedItems) {
-    mergedCacheItems[item.id] = item.displaySourceText
-      ? { translatedText: item.translatedText, displaySourceText: item.displaySourceText }
-      : item.translatedText;
+    if (llmSentenceSegmentationEnabled) {
+      mergedCacheItems[item.id] = {
+        translatedText: item.translatedText,
+        displaySourceText: item.displaySourceText || "",
+        sourceFingerprint: Core.fingerprintText(sourceTextById.get(String(item.id)) || "")
+      };
+    } else {
+      mergedCacheItems[item.id] = item.displaySourceText
+        ? { translatedText: item.translatedText, displaySourceText: item.displaySourceText }
+        : item.translatedText;
+    }
   }
 
   await persistTranslationCache({
@@ -181,7 +397,8 @@ async function handleTranslateBatch(message) {
       baseUrl: translationConfig.baseUrl,
       targetLanguage,
       sourceLanguage,
-      asrCorrectionEnabled
+      asrCorrectionEnabled,
+      llmSentenceSegmentationEnabled
     },
     addedCount: translatedItems.length,
     maxItems: Number(settings.translationCacheMaxItems) || Core.DEFAULT_CACHE_MAX_ITEMS
@@ -258,8 +475,8 @@ async function handleImmersiveTranslate(message) {
   };
 }
 
-function inFlightCueKey(cacheKey, cueId) {
-  return `${cacheKey}:${cueId}`;
+function inFlightCueKey(cacheKey, cueId, sourceText) {
+  return `${cacheKey}:${cueId}:${Core.fingerprintText(sourceText || "")}`;
 }
 
 async function translateMissingCues(request) {
@@ -267,7 +484,7 @@ async function translateMissingCues(request) {
   const sharedPromises = [];
 
   for (const cue of request.cues) {
-    const key = inFlightCueKey(request.cacheKey, cue.id);
+    const key = inFlightCueKey(request.cacheKey, cue.id, cue.sourceText);
     const existing = inFlightCueTranslations.get(key);
     if (existing) {
       sharedPromises.push(existing);
@@ -280,7 +497,7 @@ async function translateMissingCues(request) {
   if (pendingCues.length) {
     const batchPromise = translateWithRetry(Object.assign({}, request, { cues: pendingCues }));
     for (const cue of pendingCues) {
-      const key = inFlightCueKey(request.cacheKey, cue.id);
+      const key = inFlightCueKey(request.cacheKey, cue.id, cue.sourceText);
       const itemPromise = batchPromise.then((items) => {
         return items.find((entry) => String(entry.id) === String(cue.id)) || null;
       });
@@ -385,18 +602,29 @@ async function translateBatch({ translationConfig, sourceLanguage, targetLanguag
     "Return exactly one item for every input id and never skip ids. " +
     "Output strict valid JSON only, with no markdown and no extra fields. Escape all quotes and backslashes inside strings. Exact format: " +
     "{\"items\":[{\"id\":\"0\",\"translatedText\":\"...\"}]}.";
+  const segmentationInstruction =
+    `You are a ${sourceLabel} subtitle sentence-boundary engine. Group adjacent input cues into natural, complete spoken sentences before translation. ` +
+    "An input cue may end in the middle of a sentence and the next cue may complete it; merge those cues into one group. " +
+    "Never translate, summarize, reorder, invent, or delete words, and never split one input id across groups. " +
+    "Every input id must be covered exactly once, in the original order, using consecutive startId/endId ranges. " +
+    "Prefer one complete sentence per group. When an input id already contains multiple sentences, keep them together. " +
+    "In displaySourceText, concatenate the covered source text and only restore natural punctuation and capitalization. " +
+    "Output strict valid JSON only, with no markdown. Exact format: " +
+    "{\"groups\":[{\"startId\":\"0\",\"endId\":\"1\",\"displaySourceText\":\"Complete sentence.\"}]}.";
   const systemPrompt =
-    mode === "immersive"
-      ? `You are an immersive webpage translation engine. Translate ${sourceLabel} webpage text into natural ${targetLabel}. ` +
-        "Do not summarize, omit, merge, or split items. Preserve URLs, code identifiers, numbers, names, product names, and formatting-sensitive symbols. " +
-        "Keep the translation faithful and readable as a bilingual paragraph shown under the original text. " +
-        outputInstruction
-      : `You are a subtitle translation engine. Translate ${sourceLabel} subtitles into natural ${targetLabel}. ` +
-        sourcePolishInstruction +
-        cueBoundaryInstruction +
-        terminologyInstruction +
-        "Keep meaning concise for on-screen reading. `translatedText` must translate the polished meaning. " +
-        outputInstruction;
+    mode === "segmentation"
+      ? segmentationInstruction
+      : mode === "immersive"
+        ? `You are an immersive webpage translation engine. Translate ${sourceLabel} webpage text into natural ${targetLabel}. ` +
+          "Do not summarize, omit, merge, or split items. Preserve URLs, code identifiers, numbers, names, product names, and formatting-sensitive symbols. " +
+          "Keep the translation faithful and readable as a bilingual paragraph shown under the original text. " +
+          outputInstruction
+        : `You are a subtitle translation engine. Translate ${sourceLabel} subtitles into natural ${targetLabel}. ` +
+          sourcePolishInstruction +
+          cueBoundaryInstruction +
+          terminologyInstruction +
+          "Keep meaning concise for on-screen reading. `translatedText` must translate the polished meaning. " +
+          outputInstruction;
   const userPayload = {
     items: cues.map((cue) => ({ id: String(cue.id), text: cue.sourceText }))
   };
@@ -520,6 +748,10 @@ async function translateBatch({ translationConfig, sourceLanguage, targetLanguag
     throw new Error(
       `${translationConfig.providerLabel} response truncated (finish_reason=${finishReason}); split batch in content.`
     );
+  }
+
+  if (mode === "segmentation") {
+    return Core.parseSentenceSegmentationContent(content, cues);
   }
 
   const items = Core.parseDeepSeekTranslationContent(content);

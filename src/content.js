@@ -14,6 +14,7 @@
   const GEMINI_MAX_PARALLEL_BATCHES = 1;
   const CUSTOM_MAX_PARALLEL_BATCHES = 4;
   const TRANSLATION_MESSAGE_TIMEOUT_MS = 130000;
+  const SEGMENTATION_MESSAGE_TIMEOUT_MS = 600000;
   const PRIORITY_WINDOW_MS = 120000;
   const URGENT_RESCHEDULE_MS = 1000;
   const RATE_LIMIT_BACKOFF_MS = 60000;
@@ -112,6 +113,7 @@
     const fontScale = Number(merged.fontScale);
     merged.fontScale = Number.isFinite(fontScale) ? Math.min(1.8, Math.max(0.7, fontScale)) : 1;
     merged.subtitleEnabled = merged.subtitleEnabled !== false;
+    merged.llmSentenceSegmentationEnabled = merged.llmSentenceSegmentationEnabled !== false;
     merged.targetLanguage = merged.targetLanguage || Core.DEFAULT_SETTINGS.targetLanguage;
     merged.sourceLanguage = merged.sourceLanguage || Core.DEFAULT_SETTINGS.sourceLanguage;
     merged.subtitlePosition = normalizeSubtitlePosition(merged.subtitlePosition);
@@ -156,24 +158,47 @@
       state.settings = normalizeSettings(state.settings);
       applySettings();
 
-      if (
+      const realtimeApiChanged = Boolean(
         changes.deepseekApiKey ||
         changes.translationProvider ||
         changes.translationApiKey ||
         changes.translationBaseUrl ||
         changes.translationModel ||
-        changes.translationJsonResponse ||
+        changes.translationJsonResponse
+      );
+      const needsSentenceSegmentationReload = Boolean(
+        changes.llmSentenceSegmentationEnabled ||
+        changes.sourceLanguage ||
+        (state.settings.llmSentenceSegmentationEnabled &&
+          (realtimeApiChanged || changes.cacheVersion))
+      );
+
+      if (
+        needsSentenceSegmentationReload &&
+        state.lastPlayerResponse
+      ) {
+        const playerResponse = state.lastPlayerResponse;
+        resetVideoState("", null, "");
+        if (state.settings.subtitleEnabled) {
+          handlePlayerResponse(playerResponse);
+        }
+        return;
+      }
+
+      if (
+        realtimeApiChanged ||
         changes.targetLanguage ||
         changes.sourceLanguage ||
+        changes.asrCorrectionEnabled ||
+        changes.llmSentenceSegmentationEnabled ||
         changes.cacheVersion
       ) {
         for (const cue of state.cues) {
-          if (cue.status === "failed" || !cue.translatedText) {
-            cue.status = "pending";
-            cue.translatedText = "";
-          }
+          cue.status = "pending";
+          cue.translatedText = "";
         }
         state.queue = [];
+        state.inFlight.clear();
         scheduleTranslations(getCurrentTimeMs(), true);
       }
 
@@ -356,14 +381,57 @@
       }
 
       const merged = Core.mergeCaptionFragments(rawCues);
-      state.cues = merged;
 
       if (!merged.length) {
         setStatus("找到字幕轨道，但没有可用的英文字幕内容。");
         return;
       }
 
-      setStatus(`正在预翻译字幕 0/${merged.length}...`);
+      let preparedCues = merged;
+      let segmentationFallbackMessage = "";
+      if (state.settings.llmSentenceSegmentationEnabled && hasApiKey()) {
+        const segmentationInput = Core.splitCaptionCuesAtSentenceBoundaries(merged);
+        setStatus(`正在使用 LLM 智能断句 0/${segmentationInput.length}...`);
+        try {
+          const response = await sendMessage(
+            {
+              type: "SEGMENT_SUBTITLES",
+              videoId,
+              trackFingerprint,
+              cues: segmentationInput.map((cue) => ({
+                id: cue.id,
+                startMs: cue.startMs,
+                endMs: cue.endMs,
+                sourceText: cue.sourceText
+              }))
+            },
+            SEGMENTATION_MESSAGE_TIMEOUT_MS
+          );
+          if (!response || response.ok === false) {
+            const error = response && response.errors && response.errors[0];
+            throw new Error(error && error.message ? error.message : "LLM 智能断句失败");
+          }
+          preparedCues = Core.applySentenceSegmentationGroups(
+            segmentationInput,
+            response.groups || []
+          );
+        } catch (error) {
+          segmentationFallbackMessage = simplifyTranslationError(error && error.message ? error.message : error);
+          preparedCues = merged;
+        }
+      }
+
+      if (token !== state.loadingToken || videoId !== state.videoId || trackFingerprint !== state.trackFingerprint) {
+        return;
+      }
+
+      state.cues = preparedCues;
+
+      if (segmentationFallbackMessage) {
+        setStatus(`LLM 智能断句失败，已回退本地断句：${segmentationFallbackMessage}`);
+      } else {
+        setStatus(`正在预翻译字幕 0/${preparedCues.length}...`);
+      }
       scheduleTranslations(getCurrentTimeMs(), true);
     } catch (error) {
       if (token !== state.loadingToken) {
@@ -881,13 +949,14 @@
     pumpQueue();
   }
 
-  function sendMessage(message) {
+  function sendMessage(message, timeoutMs) {
     return new Promise((resolve, reject) => {
       let settled = false;
+      const requestTimeoutMs = Number(timeoutMs) || TRANSLATION_MESSAGE_TIMEOUT_MS;
       const timeout = setTimeout(() => {
         settled = true;
-        reject(new Error("Translation request timeout: background worker did not respond within 130 seconds."));
-      }, TRANSLATION_MESSAGE_TIMEOUT_MS);
+        reject(new Error(`LLM request timeout: background worker did not respond within ${Math.round(requestTimeoutMs / 1000)} seconds.`));
+      }, requestTimeoutMs);
 
       chrome.runtime.sendMessage(message, (response) => {
         if (settled) {
