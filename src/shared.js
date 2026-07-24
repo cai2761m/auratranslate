@@ -20,6 +20,7 @@
     subtitlePosition: null,
     llmSentenceSegmentationEnabled: true,
     asrCorrectionEnabled: true,
+    showOriginalTechnicalTerms: true,
     cacheVersion: "1",
     translationCacheMaxItems: 2000
   });
@@ -60,6 +61,12 @@
 
   function targetLanguageLabel(code) {
     return languageLabel(code, "Simplified Chinese");
+  }
+
+  function buildTechnicalTerminologyInstruction(showOriginalTechnicalTerms) {
+    return showOriginalTechnicalTerms !== false
+      ? "For any professional, technical, or specialized terms, you must append the original source term in parentheses immediately after its translation (e.g., '翻译 (Translation)'). "
+      : "Translate professional, technical, and specialized terms naturally, but do not append or repeat source-language terms in parentheses unless those parentheses already appear in the source. ";
   }
 
   // Categorize a translation error so callers can decide whether retrying is
@@ -1336,6 +1343,7 @@
     formatDisplaySourceText,
     sourceLanguageLabel,
     targetLanguageLabel,
+    buildTechnicalTerminologyInstruction,
     classifyTranslationError,
     parseJson3Captions,
     parseVttCaptions,

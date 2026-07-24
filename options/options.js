@@ -8,6 +8,7 @@
   const immersiveApi = createApiFields("immersive");
   const llmSentenceSegmentationEnabled = document.querySelector("#llmSentenceSegmentationEnabled");
   const asrCorrectionEnabled = document.querySelector("#asrCorrectionEnabled");
+  const showOriginalTechnicalTerms = document.querySelector("#showOriginalTechnicalTerms");
   const sourceLanguage = document.querySelector("#sourceLanguage");
   const targetLanguage = document.querySelector("#targetLanguage");
   const fontScale = document.querySelector("#fontScale");
@@ -32,6 +33,9 @@
     }
     if (asrCorrectionEnabled) {
       asrCorrectionEnabled.checked = settings.asrCorrectionEnabled !== false;
+    }
+    if (showOriginalTechnicalTerms) {
+      showOriginalTechnicalTerms.checked = settings.showOriginalTechnicalTerms !== false;
     }
     if (sourceLanguage) {
       sourceLanguage.value = settings.sourceLanguage || Core.DEFAULT_SETTINGS.sourceLanguage;
@@ -141,6 +145,7 @@
       immersiveTranslationJsonResponse: useDedicatedImmersiveApi ? immersive.jsonResponse : true,
       llmSentenceSegmentationEnabled: readChecked(llmSentenceSegmentationEnabled, true),
       asrCorrectionEnabled: readChecked(asrCorrectionEnabled, true),
+      showOriginalTechnicalTerms: readChecked(showOriginalTechnicalTerms, true),
       sourceLanguage: readValue(sourceLanguage, Core.DEFAULT_SETTINGS.sourceLanguage),
       targetLanguage: readValue(targetLanguage, Core.DEFAULT_SETTINGS.targetLanguage),
       fontScale: Number(readValue(fontScale, Core.DEFAULT_SETTINGS.fontScale)),
