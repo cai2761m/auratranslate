@@ -114,6 +114,7 @@
     merged.fontScale = Number.isFinite(fontScale) ? Math.min(1.8, Math.max(0.7, fontScale)) : 1;
     merged.subtitleEnabled = merged.subtitleEnabled !== false;
     merged.llmSentenceSegmentationEnabled = merged.llmSentenceSegmentationEnabled !== false;
+    merged.showOriginalTechnicalTerms = merged.showOriginalTechnicalTerms !== false;
     merged.targetLanguage = merged.targetLanguage || Core.DEFAULT_SETTINGS.targetLanguage;
     merged.sourceLanguage = merged.sourceLanguage || Core.DEFAULT_SETTINGS.sourceLanguage;
     merged.subtitlePosition = normalizeSubtitlePosition(merged.subtitlePosition);
@@ -190,6 +191,7 @@
         changes.targetLanguage ||
         changes.sourceLanguage ||
         changes.asrCorrectionEnabled ||
+        changes.showOriginalTechnicalTerms ||
         changes.llmSentenceSegmentationEnabled ||
         changes.cacheVersion
       ) {

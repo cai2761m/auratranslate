@@ -250,6 +250,7 @@ async function handleTranslateBatch(message) {
   const sourceLanguage = settings.sourceLanguage || Core.DEFAULT_SETTINGS.sourceLanguage;
   const asrCorrectionEnabled = settings.asrCorrectionEnabled !== false;
   const llmSentenceSegmentationEnabled = settings.llmSentenceSegmentationEnabled !== false;
+  const showOriginalTechnicalTerms = settings.showOriginalTechnicalTerms !== false;
   const translationConfig = Core.resolveTranslationConfig(settings);
 
   if (!translationConfig.apiKey) {
@@ -305,12 +306,18 @@ async function handleTranslateBatch(message) {
     Core.MERGE_VERSION,
     settings.cacheVersion || "1"
   ]);
-  const cacheKey = Core.makeCacheKey(
+  const activeCacheKeyParts =
     llmSentenceSegmentationEnabled
       ? segmentedCacheKeyParts
       : asrCorrectionEnabled
         ? correctedCacheKeyParts
-        : legacyCacheKeyParts
+        : legacyCacheKeyParts;
+  const cacheKey = Core.makeCacheKey(
+    activeCacheKeyParts.concat(
+      showOriginalTechnicalTerms
+        ? "original-technical-terms-on"
+        : "original-technical-terms-off"
+    )
   );
 
   const cache = await storageGet({ [cacheKey]: { items: {}, updatedAt: 0 } });
@@ -369,6 +376,7 @@ async function handleTranslateBatch(message) {
     targetLanguage,
     sourceLanguage,
     asrCorrectionEnabled,
+    showOriginalTechnicalTerms,
     cues: missingCues
   });
 
@@ -398,7 +406,8 @@ async function handleTranslateBatch(message) {
       targetLanguage,
       sourceLanguage,
       asrCorrectionEnabled,
-      llmSentenceSegmentationEnabled
+      llmSentenceSegmentationEnabled,
+      showOriginalTechnicalTerms
     },
     addedCount: translatedItems.length,
     maxItems: Number(settings.translationCacheMaxItems) || Core.DEFAULT_CACHE_MAX_ITEMS
@@ -584,7 +593,15 @@ function retryDelayForError(message, translationConfig, attempt) {
   return base * Math.pow(2, attempt);
 }
 
-async function translateBatch({ translationConfig, sourceLanguage, targetLanguage, asrCorrectionEnabled, cues, mode }) {
+async function translateBatch({
+  translationConfig,
+  sourceLanguage,
+  targetLanguage,
+  asrCorrectionEnabled,
+  showOriginalTechnicalTerms,
+  cues,
+  mode
+}) {
   const sourceLabel = Core.sourceLanguageLabel(sourceLanguage);
   const targetLabel = Core.targetLanguageLabel(targetLanguage);
   // Allow roughly 200 output tokens per cue so longer batches are not silently
@@ -596,8 +613,9 @@ async function translateBatch({ translationConfig, sourceLanguage, targetLanguag
     : "Do not rewrite the source words for ASR correction; only restore natural punctuation and capitalization. ";
   const cueBoundaryInstruction =
     "Each input id is already a locally merged subtitle cue. Use nearby batch context only to understand meaning, but do not merge text across ids or make multiple ids return the same full sentence. Keep one distinct `translatedText` for each input id. ";
-  const terminologyInstruction =
-    "For any professional, technical, or specialized terms, you must append the original source term in parentheses immediately after its translation (e.g., '翻译 (Translation)'). ";
+  const terminologyInstruction = Core.buildTechnicalTerminologyInstruction(
+    showOriginalTechnicalTerms
+  );
   const outputInstruction =
     "Return exactly one item for every input id and never skip ids. " +
     "Output strict valid JSON only, with no markdown and no extra fields. Escape all quotes and backslashes inside strings. Exact format: " +

@@ -451,6 +451,15 @@ test("default settings enable LLM sentence segmentation", () => {
   assert.equal(Core.DEFAULT_SETTINGS.llmSentenceSegmentationEnabled, true);
 });
 
+test("default settings show original technical terms", () => {
+  assert.equal(Core.DEFAULT_SETTINGS.showOriginalTechnicalTerms, true);
+});
+
+test("technical terminology prompt follows the display setting", () => {
+  assert.match(Core.buildTechnicalTerminologyInstruction(true), /append the original source term/i);
+  assert.match(Core.buildTechnicalTerminologyInstruction(false), /do not append or repeat/i);
+});
+
 test("resolveTranslationConfig supports custom OpenAI-compatible API", () => {
   const config = Core.resolveTranslationConfig({
     translationProvider: "custom",

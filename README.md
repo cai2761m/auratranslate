@@ -12,6 +12,7 @@ The extension does not perform audio recognition. YouTube subtitle translation i
 - Multiple providers: supports DeepSeek, Gemini, and custom OpenAI-compatible Chat Completions APIs.
 - LLM sentence segmentation: enabled by default, it regroups adjacent caption cues into complete sentences before translation and can be disabled in Settings.
 - ASR correction: optionally asks the model to fix obvious auto-caption recognition errors before translating.
+- Original technical terms: optionally appends source terms after translated terminology, such as `翻译 (Translation)`; enabled by default.
 - Priority scheduling: translates captions near the current playback position first, then continues pre-translating the rest of the video.
 - Translation cache: stores successful subtitle translations in `chrome.storage.local` to reduce repeated API calls.
 - Draggable controls: subtitle overlay position and immersive translate button position are persisted locally.
@@ -70,6 +71,7 @@ By default, immersive translation reuses the real-time subtitle API. Select a pr
 | --- | --- |
 | LLM Sentence Segmentation | Regroups cross-cue sentences with the real-time subtitle model before translation; enabled by default |
 | ASR Correction | Fix obvious YouTube auto-caption recognition errors before translation |
+| Original Technical Terms | Appends source-language terms after translated subtitle terminology; enabled by default |
 | Source Language | Currently English |
 | Target Language | Simplified Chinese or Traditional Chinese |
 | Font Scale | Subtitle overlay size, from `0.7x` to `1.8x` |
@@ -135,11 +137,12 @@ Subtitle translations are cached by:
 - source language
 - target language
 - ASR correction mode
+- original technical-term display mode
 - LLM sentence segmentation mode and version
 - caption merge version
 - cache version
 
-A new API request is expected when a cue has not been translated before, the API configuration changes, the source or target language changes, LLM sentence segmentation or ASR correction changes, the cache is cleared, or the segmentation/merge algorithm version changes. Sentence segmentation results are cached separately and reused for the same video, track, model, and source language.
+A new API request is expected when a cue has not been translated before, the API configuration changes, the source or target language changes, LLM sentence segmentation, ASR correction, or original technical-term display changes, the cache is cleared, or the segmentation/merge algorithm version changes. Sentence segmentation results are cached separately and reused for the same video, track, model, and source language.
 
 Immersive webpage translations are currently generated on demand and inserted into the page during the current session.
 
