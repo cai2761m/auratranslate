@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AuraTranslate",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "AuraTranslate - AI bilingual subtitles and immersive webpage translation",
   "permissions": ["storage"],
   "host_permissions": [
@@ -20,6 +20,18 @@
       "js": ["src/shared.js", "src/content.js"],
       "css": ["src/overlay.css"],
       "run_at": "document_start"
+    },
+    {
+      "matches": ["https://youtube.googleapis.com/embed/*"],
+      "js": ["src/shared.js", "src/content.js"],
+      "css": ["src/overlay.css"],
+      "run_at": "document_start",
+      "all_frames": true
+    },
+    {
+      "matches": ["https://drive.google.com/file/*"],
+      "js": ["src/shared.js", "src/drive.js"],
+      "run_at": "document_idle"
     },
     {
       "matches": ["http://*/*", "https://*/*"],

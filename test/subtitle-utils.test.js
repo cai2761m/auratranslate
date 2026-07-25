@@ -122,6 +122,22 @@ test("parseYouTubeTranscriptResponse extracts transcript segments", () => {
   assert.equal(cues[0].sourceText, "Hello world.");
 });
 
+test("parseGoogleDriveTranscriptItems infers cue ends from the next timestamp", () => {
+  const cues = Core.parseGoogleDriveTranscriptItems([
+    { startMs: 8240, sourceText: " Second &amp; cleaned " },
+    { startMs: 640, sourceText: "First cue" },
+    { startMs: 3919, sourceText: "Middle cue" },
+    { startMs: 3919, sourceText: "Middle cue" },
+    { startMs: "invalid", sourceText: "Ignored" }
+  ]);
+
+  assert.deepEqual(cues, [
+    { startMs: 640, endMs: 3919, sourceText: "First cue" },
+    { startMs: 3919, endMs: 8240, sourceText: "Middle cue" },
+    { startMs: 8240, endMs: 13240, sourceText: "Second & cleaned" }
+  ]);
+});
+
 test("findYouTubeTranscriptParams locates nested transcript endpoint params", () => {
   const params = Core.findYouTubeTranscriptParams(
     {
