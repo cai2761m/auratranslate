@@ -3,6 +3,10 @@
 
   const Core = globalThis.YTBTCore;
   const CHANNEL = "__ytbt_player_response__";
+  const DRIVE_CHANNEL = "__ytbt_drive_transcript__";
+  const IS_DRIVE_PLAYER =
+    window.location.hostname === "youtube.googleapis.com" &&
+    window.location.pathname.startsWith("/embed");
   const BATCH_SIZE = 30;
   const GEMINI_BATCH_SIZE = 8;
   const CUSTOM_BATCH_SIZE = 15;
@@ -40,6 +44,7 @@
   const state = {
     settings: Object.assign({}, Core.DEFAULT_SETTINGS),
     lastPlayerResponse: null,
+    driveTranscriptPayload: null,
     videoId: "",
     track: null,
     transcript: null,
@@ -80,8 +85,14 @@
   async function init() {
     await loadSettings();
     applySettings();
-    bindPageMessages();
-    injectPageBridge();
+    if (IS_DRIVE_PLAYER) {
+      bindDrivePlayerMessages();
+      requestDriveTranscript();
+      setInterval(requestDriveTranscript, 2000);
+    } else {
+      bindPageMessages();
+      injectPageBridge();
+    }
     bindStorageChanges();
     startNativeCaptionBlocker();
     setInterval(watchVideoElement, 1000);
@@ -174,10 +185,16 @@
           (realtimeApiChanged || changes.cacheVersion))
       );
 
-      if (
-        needsSentenceSegmentationReload &&
-        state.lastPlayerResponse
-      ) {
+      if (needsSentenceSegmentationReload && state.driveTranscriptPayload) {
+        const driveTranscriptPayload = state.driveTranscriptPayload;
+        resetVideoState("", null, "");
+        if (state.settings.subtitleEnabled) {
+          handleDriveTranscript(driveTranscriptPayload);
+        }
+        return;
+      }
+
+      if (needsSentenceSegmentationReload && state.lastPlayerResponse) {
         const playerResponse = state.lastPlayerResponse;
         resetVideoState("", null, "");
         if (state.settings.subtitleEnabled) {
@@ -206,6 +223,12 @@
 
       if (changes.subtitleEnabled && state.settings.subtitleEnabled && state.lastPlayerResponse) {
         handlePlayerResponse(state.lastPlayerResponse);
+      } else if (
+        changes.subtitleEnabled &&
+        state.settings.subtitleEnabled &&
+        state.driveTranscriptPayload
+      ) {
+        handleDriveTranscript(state.driveTranscriptPayload);
       }
     });
   }
@@ -269,6 +292,127 @@
 
       handlePlayerResponse(data);
     });
+  }
+
+  function bindDrivePlayerMessages() {
+    window.addEventListener("message", (event) => {
+      if (
+        event.source !== window.parent ||
+        event.origin !== "https://drive.google.com"
+      ) {
+        return;
+      }
+
+      const data = event.data;
+      if (!data || data.channel !== DRIVE_CHANNEL) {
+        return;
+      }
+
+      if (data.type === "DRIVE_TRANSCRIPT") {
+        handleDriveTranscript(data).catch((error) => {
+          setStatus(`Google Drive 字幕读取失败：${simplifyTranslationError(error && error.message ? error.message : error)}`);
+        });
+      } else if (data.type === "DRIVE_TRANSCRIPT_STATUS") {
+        const statusFileId = String(data.fileId || "");
+        if (statusFileId && statusFileId !== state.videoId) {
+          state.driveTranscriptPayload = null;
+          resetVideoState(statusFileId, null, "", null);
+        }
+        setStatus(String(data.message || ""));
+      }
+    });
+  }
+
+  function requestDriveTranscript() {
+    if (!IS_DRIVE_PLAYER || window.parent === window) {
+      return;
+    }
+
+    window.parent.postMessage(
+      {
+        channel: DRIVE_CHANNEL,
+        type: "REQUEST_DRIVE_TRANSCRIPT"
+      },
+      "https://drive.google.com"
+    );
+  }
+
+  async function handleDriveTranscript(payload) {
+    if (!state.settings.subtitleEnabled) {
+      setStatus("");
+      return;
+    }
+
+    const videoId = String(payload.fileId || "");
+    if (
+      state.driveTranscriptPayload &&
+      videoId &&
+      videoId === state.videoId &&
+      String(payload.signature || "") === String(state.driveTranscriptPayload.signature || "") &&
+      state.cues.length
+    ) {
+      return;
+    }
+
+    const rawCues = Array.isArray(payload.cues)
+      ? payload.cues
+        .slice(0, 10000)
+        .map((cue) => ({
+          startMs: Number(cue && cue.startMs),
+          endMs: Number(cue && cue.endMs),
+          sourceText: Core.normalizeSubtitleText(cue && cue.sourceText).slice(0, 2000)
+        }))
+        .filter((cue) => (
+          Number.isFinite(cue.startMs) &&
+          Number.isFinite(cue.endMs) &&
+          cue.endMs > cue.startMs &&
+          cue.sourceText
+        ))
+      : [];
+
+    if (!videoId || !rawCues.length) {
+      setStatus("Google Drive 没有可用的转写字幕。");
+      return;
+    }
+
+    const sourceLang = String(state.settings.sourceLanguage || "en").toLowerCase();
+    const trackFingerprint = Core.fingerprintText([
+      "google-drive",
+      videoId,
+      sourceLang,
+      String(payload.signature || ""),
+      rawCues.length
+    ].join("|"));
+
+    state.driveTranscriptPayload = payload;
+    state.lastPlayerResponse = null;
+
+    if (
+      videoId === state.videoId &&
+      trackFingerprint === state.trackFingerprint &&
+      state.cues.length
+    ) {
+      return;
+    }
+
+    resetVideoState(videoId, null, trackFingerprint, null);
+    setStatus("正在读取 Google Drive 转写字幕...");
+    const token = state.loadingToken;
+
+    try {
+      await prepareCaptionCues(
+        rawCues,
+        videoId,
+        trackFingerprint,
+        token,
+        "Google Drive 转写"
+      );
+    } catch (error) {
+      if (token !== state.loadingToken) {
+        return;
+      }
+      setStatus(`Google Drive 字幕读取失败：${simplifyTranslationError(error && error.message ? error.message : error)}`);
+    }
   }
 
   async function handlePlayerResponse(payload) {
@@ -378,69 +522,85 @@
 
     try {
       const rawCues = await fetchCaptionData(track, videoId, transcript);
-      if (token !== state.loadingToken || videoId !== state.videoId || trackFingerprint !== state.trackFingerprint) {
-        return;
-      }
-
-      const merged = Core.mergeCaptionFragments(rawCues);
-
-      if (!merged.length) {
-        setStatus("找到字幕轨道，但没有可用的英文字幕内容。");
-        return;
-      }
-
-      let preparedCues = merged;
-      let segmentationFallbackMessage = "";
-      if (state.settings.llmSentenceSegmentationEnabled && hasApiKey()) {
-        const segmentationInput = Core.splitCaptionCuesAtSentenceBoundaries(merged);
-        setStatus(`正在使用 LLM 智能断句 0/${segmentationInput.length}...`);
-        try {
-          const response = await sendMessage(
-            {
-              type: "SEGMENT_SUBTITLES",
-              videoId,
-              trackFingerprint,
-              cues: segmentationInput.map((cue) => ({
-                id: cue.id,
-                startMs: cue.startMs,
-                endMs: cue.endMs,
-                sourceText: cue.sourceText
-              }))
-            },
-            SEGMENTATION_MESSAGE_TIMEOUT_MS
-          );
-          if (!response || response.ok === false) {
-            const error = response && response.errors && response.errors[0];
-            throw new Error(error && error.message ? error.message : "LLM 智能断句失败");
-          }
-          preparedCues = Core.applySentenceSegmentationGroups(
-            segmentationInput,
-            response.groups || []
-          );
-        } catch (error) {
-          segmentationFallbackMessage = simplifyTranslationError(error && error.message ? error.message : error);
-          preparedCues = merged;
-        }
-      }
-
-      if (token !== state.loadingToken || videoId !== state.videoId || trackFingerprint !== state.trackFingerprint) {
-        return;
-      }
-
-      state.cues = preparedCues;
-
-      if (segmentationFallbackMessage) {
-        setStatus(`LLM 智能断句失败，已回退本地断句：${segmentationFallbackMessage}`);
-      } else {
-        setStatus(`正在预翻译字幕 0/${preparedCues.length}...`);
-      }
-      scheduleTranslations(getCurrentTimeMs(), true);
+      await prepareCaptionCues(
+        rawCues,
+        videoId,
+        trackFingerprint,
+        token,
+        "YouTube 字幕轨道"
+      );
     } catch (error) {
       if (token !== state.loadingToken) {
         return;
       }
       setStatus(`字幕读取失败：${formatCaptionLoadError(error)}`);
     }
+  }
+
+  async function prepareCaptionCues(rawCues, videoId, trackFingerprint, token, sourceLabel) {
+    if (
+      token !== state.loadingToken ||
+      videoId !== state.videoId ||
+      trackFingerprint !== state.trackFingerprint
+    ) {
+      return;
+    }
+
+    const merged = Core.mergeCaptionFragments(rawCues);
+    if (!merged.length) {
+      setStatus(`${sourceLabel || "字幕轨道"}没有可用的字幕内容。`);
+      return;
+    }
+
+    let preparedCues = merged;
+    let segmentationFallbackMessage = "";
+    if (state.settings.llmSentenceSegmentationEnabled && hasApiKey()) {
+      const segmentationInput = Core.splitCaptionCuesAtSentenceBoundaries(merged);
+      setStatus(`正在使用 LLM 智能断句 0/${segmentationInput.length}...`);
+      try {
+        const response = await sendMessage(
+          {
+            type: "SEGMENT_SUBTITLES",
+            videoId,
+            trackFingerprint,
+            cues: segmentationInput.map((cue) => ({
+              id: cue.id,
+              startMs: cue.startMs,
+              endMs: cue.endMs,
+              sourceText: cue.sourceText
+            }))
+          },
+          SEGMENTATION_MESSAGE_TIMEOUT_MS
+        );
+        if (!response || response.ok === false) {
+          const error = response && response.errors && response.errors[0];
+          throw new Error(error && error.message ? error.message : "LLM 智能断句失败");
+        }
+        preparedCues = Core.applySentenceSegmentationGroups(
+          segmentationInput,
+          response.groups || []
+        );
+      } catch (error) {
+        segmentationFallbackMessage = simplifyTranslationError(error && error.message ? error.message : error);
+        preparedCues = merged;
+      }
+    }
+
+    if (
+      token !== state.loadingToken ||
+      videoId !== state.videoId ||
+      trackFingerprint !== state.trackFingerprint
+    ) {
+      return;
+    }
+
+    state.cues = preparedCues;
+    if (segmentationFallbackMessage) {
+      setStatus(`LLM 智能断句失败，已回退本地断句：${segmentationFallbackMessage}`);
+    } else {
+      setStatus(`正在预翻译字幕 0/${preparedCues.length}...`);
+    }
+    scheduleTranslations(getCurrentTimeMs(), true);
   }
 
   async function fetchCaptionData(track, videoId, transcript) {

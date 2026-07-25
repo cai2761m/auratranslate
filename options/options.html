@@ -12,7 +12,7 @@
         <div>
           <p class="eyebrow">AuraTranslate</p>
           <h1>设置</h1>
-          <p>分别配置 YouTube 实时字幕翻译和普通网页沉浸式翻译使用的 LLM API。</p>
+          <p>分别配置 YouTube / Google Drive 实时字幕翻译和普通网页沉浸式翻译使用的 LLM API。</p>
         </div>
       </header>
 
@@ -21,7 +21,7 @@
           <nav class="sidebar-nav">
             <a href="#realtime-api" class="sidebar-link">
               <span class="sidebar-title">实时字幕</span>
-              <span class="sidebar-desc">YouTube 双语字幕 API</span>
+              <span class="sidebar-desc">视频双语字幕 API</span>
             </a>
             <a href="#immersive-api" class="sidebar-link">
               <span class="sidebar-title">沉浸式翻译</span>
@@ -42,9 +42,9 @@
           <form id="settings-form" class="panel">
             <section id="realtime-api" class="settings-section">
               <div class="section-heading">
-                <p class="section-kicker">YouTube</p>
+                <p class="section-kicker">YouTube / Google Drive</p>
                 <h2>实时字幕翻译 API</h2>
-                <p>用于 YouTube 字幕抓取、预翻译和视频上的双语字幕叠加层。</p>
+                <p>用于 YouTube 和 Google Drive 字幕抓取、预翻译及视频上的双语字幕叠加层。</p>
               </div>
 
               <label class="field">
@@ -167,7 +167,7 @@
 
               <label class="toggle">
                 <input id="subtitleEnabled" type="checkbox">
-                <span>启用插件字幕并隐藏 YouTube 原生 CC 字幕</span>
+                <span>启用插件字幕并隐藏 YouTube / Google Drive 原生字幕</span>
               </label>
             </section>
 

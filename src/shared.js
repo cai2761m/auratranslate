@@ -638,6 +638,44 @@
     return cues.sort((left, right) => left.startMs - right.startMs);
   }
 
+  function parseGoogleDriveTranscriptItems(items, finalEndMs) {
+    const normalized = [];
+    const seen = new Set();
+
+    for (const item of Array.isArray(items) ? items : []) {
+      const startMs = Number(item && item.startMs);
+      const sourceText = normalizeSubtitleText(item && item.sourceText);
+      if (!Number.isFinite(startMs) || startMs < 0 || !sourceText) {
+        continue;
+      }
+
+      const key = `${startMs}:${sourceText}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      normalized.push({ startMs, sourceText });
+    }
+
+    normalized.sort((left, right) => left.startMs - right.startMs);
+    const explicitFinalEndMs = Number(finalEndMs);
+
+    return normalized.map((item, index) => {
+      const next = normalized[index + 1];
+      const inferredEndMs = next
+        ? next.startMs
+        : Number.isFinite(explicitFinalEndMs) && explicitFinalEndMs > item.startMs
+          ? explicitFinalEndMs
+          : item.startMs + 5000;
+
+      return {
+        startMs: item.startMs,
+        endMs: Math.max(item.startMs + 1, inferredEndMs),
+        sourceText: item.sourceText
+      };
+    });
+  }
+
   function findYouTubeTranscriptParams(value, depth) {
     if (!value || depth > 24) {
       return "";
@@ -1350,6 +1388,7 @@
     parseVttTime,
     parseXmlCaptions,
     parseYouTubeTranscriptResponse,
+    parseGoogleDriveTranscriptItems,
     findYouTubeTranscriptParams,
     mergeCaptionFragments,
     splitCaptionCuesAtSentenceBoundaries,
