@@ -1479,9 +1479,12 @@
     state.lastNativeCaptionSweepAt = Date.now();
 
     if (state.settings.subtitleEnabled) {
+      restoreProtectedPlayerContainers();
       requestDisableNativeCaptions(Boolean(force));
       hideNativeCaptionNodeTree(document);
-      hideCaptionLikePlayerOverlays();
+      if (!IS_DRIVE_PLAYER) {
+        hideCaptionLikePlayerOverlays();
+      }
       disableBrowserTextTracks();
     } else {
       restoreNativeCaptionNodes();
@@ -1502,7 +1505,7 @@
     }
 
     for (const node of nodes) {
-      if (state.overlay && (node === state.overlay || state.overlay.contains(node))) {
+      if (Core.isProtectedVideoContainer(node, state.overlay)) {
         continue;
       }
       node.dataset.ytbtNativeCaptionHidden = "true";
@@ -1544,6 +1547,9 @@
 
   function isLikelyNativeCaptionOverlay(node, playerRect) {
     if (!node || !state.settings.subtitleEnabled) {
+      return false;
+    }
+    if (Core.isProtectedVideoContainer(node, state.overlay)) {
       return false;
     }
     if (node.closest(".ytbt-overlay")) {
@@ -1632,6 +1638,19 @@
 
   function restoreNativeCaptionNodes() {
     for (const node of document.querySelectorAll('[data-ytbt-native-caption-hidden="true"]')) {
+      delete node.dataset.ytbtNativeCaptionHidden;
+      node.style.removeProperty("display");
+      node.style.removeProperty("visibility");
+      node.style.removeProperty("opacity");
+      node.style.removeProperty("pointer-events");
+    }
+  }
+
+  function restoreProtectedPlayerContainers() {
+    for (const node of document.querySelectorAll('[data-ytbt-native-caption-hidden="true"]')) {
+      if (!Core.isProtectedVideoContainer(node, state.overlay)) {
+        continue;
+      }
       delete node.dataset.ytbtNativeCaptionHidden;
       node.style.removeProperty("display");
       node.style.removeProperty("visibility");

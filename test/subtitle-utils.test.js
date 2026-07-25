@@ -138,6 +138,47 @@ test("parseGoogleDriveTranscriptItems infers cue ends from the next timestamp", 
   ]);
 });
 
+test("player containers are protected from native-caption hiding", () => {
+  const overlay = {};
+  const playerRoot = {
+    contains(node) {
+      return node === overlay;
+    },
+    matches(selector) {
+      return selector.includes("#player");
+    },
+    querySelector(selector) {
+      return selector === "video, audio" ? {} : null;
+    }
+  };
+  const videoAncestor = {
+    contains() {
+      return false;
+    },
+    matches() {
+      return false;
+    },
+    querySelector(selector) {
+      return selector === "video, audio" ? {} : null;
+    }
+  };
+  const captionNode = {
+    contains() {
+      return false;
+    },
+    matches() {
+      return false;
+    },
+    querySelector() {
+      return null;
+    }
+  };
+
+  assert.equal(Core.isProtectedVideoContainer(playerRoot, overlay), true);
+  assert.equal(Core.isProtectedVideoContainer(videoAncestor, null), true);
+  assert.equal(Core.isProtectedVideoContainer(captionNode, overlay), false);
+});
+
 test("findYouTubeTranscriptParams locates nested transcript endpoint params", () => {
   const params = Core.findYouTubeTranscriptParams(
     {
