@@ -34,7 +34,8 @@ The extension does not perform audio recognition. Video subtitle translation is 
 1. Open a YouTube video that has English captions.
 2. AuraTranslate reads the available caption track.
 3. Captions are merged, translated, cached, and displayed as Chinese-English subtitles on top of the video.
-4. Drag the subtitle overlay to reposition it.
+4. Drag the subtitle overlay to reposition it. On Google Drive, AuraTranslate relays the
+   gesture through Drive's transparent player layer.
 
 ### Google Drive Subtitles
 

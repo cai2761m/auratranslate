@@ -125,7 +125,10 @@ test("subtitle overlay starts dragging immediately and saves its position", () =
       "",
       "  globalThis.__YTBTDragTest = {",
       "    state,",
-      "    bindOverlayDragHandlers",
+      "    bindOverlayDragHandlers,",
+      "    beginRelayedOverlayDrag,",
+      "    moveRelayedOverlayDrag,",
+      "    endRelayedOverlayDrag",
       "  };",
       "})();"
     ].join("\n")
@@ -188,4 +191,24 @@ test("subtitle overlay starts dragging immediately and saves its position", () =
   assert.equal(api.state.overlayDrag.pointerId, null);
   assert.equal(capturedPointers.has(7), false);
   assert.equal(classNames.has("ytbt-dragging"), false);
+
+  api.beginRelayedOverlayDrag({
+    pointerId: 11,
+    clientX: 150,
+    clientY: 120
+  });
+  api.moveRelayedOverlayDrag({
+    pointerId: 11,
+    clientX: 400,
+    clientY: 400
+  });
+  api.endRelayedOverlayDrag({
+    pointerId: 11,
+    clientX: 400,
+    clientY: 400
+  }, true);
+
+  assert.equal(savedSettings.subtitlePosition.xPct, 56.25);
+  assert.equal(savedSettings.subtitlePosition.yPct, 70);
+  assert.equal(api.state.overlayDrag.pointerId, null);
 });
