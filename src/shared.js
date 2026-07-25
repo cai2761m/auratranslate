@@ -285,6 +285,37 @@
       .trim();
   }
 
+  function isProtectedVideoContainer(node, overlay) {
+    if (!node) {
+      return false;
+    }
+
+    if (
+      node === overlay ||
+      (
+        overlay &&
+        typeof node.contains === "function" &&
+        node.contains(overlay)
+      )
+    ) {
+      return true;
+    }
+
+    if (
+      typeof node.matches === "function" &&
+      node.matches(
+        "video, audio, #player, #movie_player, .html5-video-player, .html5-video-container"
+      )
+    ) {
+      return true;
+    }
+
+    return Boolean(
+      typeof node.querySelector === "function" &&
+      node.querySelector("video, audio")
+    );
+  }
+
   function subtitleContentSignature(value) {
     return normalizeSubtitleText(value)
       .toLocaleLowerCase()
@@ -1378,6 +1409,7 @@
     DEFAULT_CACHE_MAX_ITEMS,
     decodeHtmlEntities,
     normalizeSubtitleText,
+    isProtectedVideoContainer,
     formatDisplaySourceText,
     sourceLanguageLabel,
     targetLanguageLabel,
