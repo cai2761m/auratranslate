@@ -24,7 +24,6 @@
   const RATE_LIMIT_BACKOFF_MS = 60000;
   const SERVICE_BACKOFF_MS = 30000;
   const DEFAULT_API_BACKOFF_MS = 10000;
-  const DRAG_LONG_PRESS_MS = 220;
   const DRAG_EDGE_PADDING_PX = 12;
   const NATIVE_CAPTION_SELECTOR = [
     ".ytp-caption-window-container",
@@ -59,10 +58,8 @@
     overlayParts: null,
     overlayDrag: {
       pointerId: null,
-      timer: null,
+      captureTarget: null,
       active: false,
-      startClientX: 0,
-      startClientY: 0,
       offsetX: 0,
       offsetY: 0,
       lastClientX: 0,
@@ -1741,7 +1738,6 @@
     }
 
     overlay.dataset.ytbtDragBound = "true";
-    overlay.addEventListener("pointerdown", handleOverlayPointerDown, true);
     for (const surface of overlay.querySelectorAll(".ytbt-lines, .ytbt-status")) {
       surface.addEventListener("pointerdown", handleOverlayPointerDown, true);
     }
@@ -1763,25 +1759,29 @@
 
     event.preventDefault();
     event.stopPropagation();
-    clearOverlayDragTimer();
 
     const drag = state.overlayDrag;
     drag.pointerId = event.pointerId;
-    drag.active = false;
-    drag.startClientX = event.clientX;
-    drag.startClientY = event.clientY;
+    drag.captureTarget = event.currentTarget;
+    drag.active = true;
     drag.lastClientX = event.clientX;
     drag.lastClientY = event.clientY;
     setOverlayDragOffsets(event.clientX, event.clientY);
+
+    if (drag.captureTarget && typeof drag.captureTarget.setPointerCapture === "function") {
+      try {
+        drag.captureTarget.setPointerCapture(event.pointerId);
+      } catch (error) {
+        // The document-level listeners below still keep dragging functional.
+      }
+    }
 
     document.addEventListener("pointermove", handleOverlayPointerMove, true);
     document.addEventListener("pointerup", handleOverlayPointerUp, true);
     document.addEventListener("pointercancel", handleOverlayPointerCancel, true);
     document.addEventListener("mouseup", handleOverlayMouseUpFallback, true);
-
-    drag.timer = setTimeout(() => {
-      startOverlayDrag();
-    }, DRAG_LONG_PRESS_MS);
+    state.overlay.classList.add("ytbt-dragging");
+    moveOverlayToPointer(event.clientX, event.clientY);
   }
 
   function setOverlayDragOffsets(clientX, clientY) {
@@ -1792,16 +1792,6 @@
     const overlayRect = state.overlay.getBoundingClientRect();
     state.overlayDrag.offsetX = clientX - overlayRect.left;
     state.overlayDrag.offsetY = clientY - overlayRect.top;
-  }
-
-  function startOverlayDrag() {
-    if (!state.overlay || state.overlayDrag.pointerId == null) {
-      return;
-    }
-
-    state.overlayDrag.active = true;
-    state.overlay.classList.add("ytbt-dragging");
-    moveOverlayToPointer(state.overlayDrag.lastClientX, state.overlayDrag.lastClientY);
   }
 
   function handleOverlayPointerMove(event) {
@@ -1893,7 +1883,22 @@
   }
 
   function cancelOverlayDrag() {
-    clearOverlayDragTimer();
+    const drag = state.overlayDrag;
+    if (
+      drag.captureTarget &&
+      drag.pointerId != null &&
+      typeof drag.captureTarget.hasPointerCapture === "function" &&
+      typeof drag.captureTarget.releasePointerCapture === "function"
+    ) {
+      try {
+        if (drag.captureTarget.hasPointerCapture(drag.pointerId)) {
+          drag.captureTarget.releasePointerCapture(drag.pointerId);
+        }
+      } catch (error) {
+        // Pointer capture may already have been released by the browser.
+      }
+    }
+
     document.removeEventListener("pointermove", handleOverlayPointerMove, true);
     document.removeEventListener("pointerup", handleOverlayPointerUp, true);
     document.removeEventListener("pointercancel", handleOverlayPointerCancel, true);
@@ -1903,15 +1908,9 @@
       state.overlay.classList.remove("ytbt-dragging");
     }
 
-    state.overlayDrag.pointerId = null;
-    state.overlayDrag.active = false;
-  }
-
-  function clearOverlayDragTimer() {
-    if (state.overlayDrag.timer) {
-      clearTimeout(state.overlayDrag.timer);
-      state.overlayDrag.timer = null;
-    }
+    drag.pointerId = null;
+    drag.captureTarget = null;
+    drag.active = false;
   }
 
   function applyOverlayPosition() {
