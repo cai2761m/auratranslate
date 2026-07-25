@@ -25,6 +25,8 @@
   const SERVICE_BACKOFF_MS = 30000;
   const DEFAULT_API_BACKOFF_MS = 10000;
   const DRAG_EDGE_PADDING_PX = 12;
+  const DRIVE_OVERLAY_GEOMETRY_INTERVAL_MS = 250;
+  const DRIVE_OVERLAY_GEOMETRY_REFRESH_MS = 2000;
   const NATIVE_CAPTION_SELECTOR = [
     ".ytp-caption-window-container",
     ".ytp-caption-window-rollup",
@@ -56,6 +58,8 @@
     statusText: "",
     overlay: null,
     overlayParts: null,
+    lastDriveOverlayGeometryAt: 0,
+    lastDriveOverlayGeometrySignature: "",
     overlayDrag: {
       pointerId: null,
       captureTarget: null,
@@ -86,6 +90,7 @@
       bindDrivePlayerMessages();
       requestDriveTranscript();
       setInterval(requestDriveTranscript, 2000);
+      setInterval(publishDriveOverlayGeometry, DRIVE_OVERLAY_GEOMETRY_INTERVAL_MS);
     } else {
       bindPageMessages();
       injectPageBridge();
@@ -316,6 +321,14 @@
           resetVideoState(statusFileId, null, "", null);
         }
         setStatus(String(data.message || ""));
+      } else if (data.type === "DRIVE_OVERLAY_POINTER_DOWN") {
+        beginRelayedOverlayDrag(data);
+      } else if (data.type === "DRIVE_OVERLAY_POINTER_MOVE") {
+        moveRelayedOverlayDrag(data);
+      } else if (data.type === "DRIVE_OVERLAY_POINTER_UP") {
+        endRelayedOverlayDrag(data, true);
+      } else if (data.type === "DRIVE_OVERLAY_POINTER_CANCEL") {
+        endRelayedOverlayDrag(data, false);
       }
     });
   }
@@ -1711,6 +1724,7 @@
     const overlay = state.overlay || document.createElement("div");
     overlay.className = "ytbt-overlay ytbt-no-cue ytbt-no-status";
     overlay.setAttribute("aria-live", "polite");
+    overlay.dataset.ytbtVersion = chrome.runtime.getManifest().version;
     overlay.style.setProperty("--ytbt-font-scale", String(state.settings.fontScale));
     overlay.innerHTML = [
       '<div class="ytbt-lines">',
@@ -1760,14 +1774,14 @@
     event.preventDefault();
     event.stopPropagation();
 
-    const drag = state.overlayDrag;
-    drag.pointerId = event.pointerId;
-    drag.captureTarget = event.currentTarget;
-    drag.active = true;
-    drag.lastClientX = event.clientX;
-    drag.lastClientY = event.clientY;
-    setOverlayDragOffsets(event.clientX, event.clientY);
+    beginOverlayDrag(
+      event.pointerId,
+      event.clientX,
+      event.clientY,
+      event.currentTarget
+    );
 
+    const drag = state.overlayDrag;
     if (drag.captureTarget && typeof drag.captureTarget.setPointerCapture === "function") {
       try {
         drag.captureTarget.setPointerCapture(event.pointerId);
@@ -1780,8 +1794,75 @@
     document.addEventListener("pointerup", handleOverlayPointerUp, true);
     document.addEventListener("pointercancel", handleOverlayPointerCancel, true);
     document.addEventListener("mouseup", handleOverlayMouseUpFallback, true);
+  }
+
+  function beginOverlayDrag(pointerId, clientX, clientY, captureTarget) {
+    if (!state.overlay) {
+      return false;
+    }
+    if (state.overlayDrag.pointerId != null) {
+      cancelOverlayDrag();
+    }
+
+    const drag = state.overlayDrag;
+    drag.pointerId = pointerId;
+    drag.captureTarget = captureTarget || null;
+    drag.active = true;
+    drag.lastClientX = clientX;
+    drag.lastClientY = clientY;
+    setOverlayDragOffsets(clientX, clientY);
     state.overlay.classList.add("ytbt-dragging");
-    moveOverlayToPointer(event.clientX, event.clientY);
+    moveOverlayToPointer(clientX, clientY);
+    return true;
+  }
+
+  function beginRelayedOverlayDrag(data) {
+    if (!state.settings.subtitleEnabled || !state.overlay) {
+      return;
+    }
+
+    const point = readRelayedPointer(data);
+    if (!point) {
+      return;
+    }
+    beginOverlayDrag(point.pointerId, point.clientX, point.clientY, null);
+  }
+
+  function moveRelayedOverlayDrag(data) {
+    const point = readRelayedPointer(data);
+    if (!point || state.overlayDrag.pointerId !== point.pointerId) {
+      return;
+    }
+
+    state.overlayDrag.lastClientX = point.clientX;
+    state.overlayDrag.lastClientY = point.clientY;
+    moveOverlayToPointer(point.clientX, point.clientY);
+  }
+
+  function endRelayedOverlayDrag(data, savePosition) {
+    const point = readRelayedPointer(data);
+    if (!point || state.overlayDrag.pointerId !== point.pointerId) {
+      return;
+    }
+
+    if (savePosition && state.overlayDrag.active) {
+      saveOverlayPosition();
+    }
+    cancelOverlayDrag();
+  }
+
+  function readRelayedPointer(data) {
+    const pointerId = Number(data && data.pointerId);
+    const clientX = Number(data && data.clientX);
+    const clientY = Number(data && data.clientY);
+    if (
+      !Number.isFinite(pointerId) ||
+      !Number.isFinite(clientX) ||
+      !Number.isFinite(clientY)
+    ) {
+      return null;
+    }
+    return { pointerId, clientX, clientY };
   }
 
   function setOverlayDragOffsets(clientX, clientY) {
@@ -1931,6 +2012,56 @@
     state.overlay.style.top = `${position.yPct}%`;
     state.overlay.style.bottom = "auto";
     state.overlay.style.transform = "translate(-50%, -50%)";
+  }
+
+  function publishDriveOverlayGeometry() {
+    if (!IS_DRIVE_PLAYER || window.parent === window || !state.overlay) {
+      return;
+    }
+
+    const now = Date.now();
+    const rects = Array.from(
+      state.overlay.querySelectorAll(".ytbt-lines, .ytbt-status")
+    ).map((surface) => {
+      const rect = surface.getBoundingClientRect();
+      const style = window.getComputedStyle(surface);
+      if (
+        style.display === "none" ||
+        style.visibility === "hidden" ||
+        rect.width <= 0 ||
+        rect.height <= 0
+      ) {
+        return null;
+      }
+      return {
+        x: rect.left,
+        y: rect.top,
+        width: rect.width,
+        height: rect.height
+      };
+    }).filter(Boolean);
+    const signature = JSON.stringify(rects.map((rect) => (
+      [rect.x, rect.y, rect.width, rect.height].map((value) => Math.round(value * 10) / 10)
+    )));
+
+    if (
+      signature === state.lastDriveOverlayGeometrySignature &&
+      now - state.lastDriveOverlayGeometryAt < DRIVE_OVERLAY_GEOMETRY_REFRESH_MS
+    ) {
+      return;
+    }
+
+    state.lastDriveOverlayGeometryAt = now;
+    state.lastDriveOverlayGeometrySignature = signature;
+    window.parent.postMessage(
+      {
+        channel: DRIVE_CHANNEL,
+        type: "DRIVE_OVERLAY_GEOMETRY",
+        version: chrome.runtime.getManifest().version,
+        rects
+      },
+      "https://drive.google.com"
+    );
   }
 
   function getOverlayPlayer() {

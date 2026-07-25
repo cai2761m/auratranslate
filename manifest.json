@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AuraTranslate",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "AuraTranslate - AI bilingual subtitles and immersive webpage translation",
   "permissions": ["storage"],
   "host_permissions": [
@@ -31,7 +31,7 @@
     {
       "matches": ["https://drive.google.com/file/*"],
       "js": ["src/shared.js", "src/drive.js"],
-      "run_at": "document_idle"
+      "run_at": "document_start"
     },
     {
       "matches": ["http://*/*", "https://*/*"],

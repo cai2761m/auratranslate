@@ -7,6 +7,8 @@
   const TRANSCRIPT_WAIT_MS = 15000;
   const TRANSCRIPT_SETTLE_MS = 500;
   const RETRY_DELAY_MS = 5000;
+  const OVERLAY_GEOMETRY_MAX_AGE_MS = 5000;
+  const DRAG_CLICK_SUPPRESSION_MS = 750;
   const TRANSCRIPT_LABEL_RE =
     /transcript|transcription|转写|轉寫|转录|轉錄|文字记录|文字記錄|文字起こし|텍스트 변환/i;
   const CLOSE_LABEL_RE = /close|关闭|關閉|閉じる|닫기/i;
@@ -17,13 +19,28 @@
     payload: null,
     loadingFileId: "",
     nextAttemptAt: 0,
-    statusMessage: ""
+    statusMessage: "",
+    overlaySource: null,
+    overlayRects: [],
+    overlayGeometryAt: 0,
+    overlayVersion: "",
+    suppressClickUntil: 0,
+    overlayDrag: {
+      pointerId: null,
+      playerTarget: null,
+      captureTarget: null
+    }
   };
 
   init();
 
   function init() {
     window.addEventListener("message", handlePlayerMessage);
+    window.addEventListener("pointerdown", handleOverlayPointerDown, true);
+    window.addEventListener("pointermove", handleOverlayPointerMove, true);
+    window.addEventListener("pointerup", handleOverlayPointerUp, true);
+    window.addEventListener("pointercancel", handleOverlayPointerCancel, true);
+    window.addEventListener("click", handleOverlayClick, true);
     syncDriveFile();
     setInterval(syncDriveFile, 1500);
   }
@@ -65,7 +82,16 @@
     }
 
     const data = event.data;
-    if (!data || data.channel !== CHANNEL || data.type !== "REQUEST_DRIVE_TRANSCRIPT") {
+    if (!data || data.channel !== CHANNEL) {
+      return;
+    }
+
+    if (data.type === "DRIVE_OVERLAY_GEOMETRY") {
+      updateOverlayGeometry(event.source, data);
+      return;
+    }
+
+    if (data.type !== "REQUEST_DRIVE_TRANSCRIPT") {
       return;
     }
 
@@ -92,6 +118,11 @@
       state.loadingFileId = "";
       state.nextAttemptAt = 0;
       state.statusMessage = "";
+      state.overlaySource = null;
+      state.overlayRects = [];
+      state.overlayGeometryAt = 0;
+      state.overlayVersion = "";
+      cancelOverlayDrag(false);
     }
 
     if (state.payload) {
@@ -106,6 +137,189 @@
     }
 
     loadDriveTranscript(fileId);
+  }
+
+  function updateOverlayGeometry(source, data) {
+    const rects = Array.isArray(data.rects)
+      ? data.rects.map(normalizeOverlayRect).filter(Boolean).slice(0, 4)
+      : [];
+    state.overlaySource = source;
+    state.overlayRects = rects;
+    state.overlayGeometryAt = Date.now();
+    state.overlayVersion = String(data.version || "");
+  }
+
+  function normalizeOverlayRect(rect) {
+    const x = Number(rect && rect.x);
+    const y = Number(rect && rect.y);
+    const width = Number(rect && rect.width);
+    const height = Number(rect && rect.height);
+    if (
+      !Number.isFinite(x) ||
+      !Number.isFinite(y) ||
+      !Number.isFinite(width) ||
+      !Number.isFinite(height) ||
+      width <= 0 ||
+      height <= 0
+    ) {
+      return null;
+    }
+    return { x, y, width, height };
+  }
+
+  function handleOverlayPointerDown(event) {
+    if (event.pointerType === "mouse" && event.button !== 0) {
+      return;
+    }
+
+    const hit = findOverlayHit(event.clientX, event.clientY);
+    if (!hit) {
+      return;
+    }
+
+    cancelOverlayDrag(false);
+    stopDrivePointerEvent(event);
+    state.suppressClickUntil = Date.now() + DRAG_CLICK_SUPPRESSION_MS;
+
+    const drag = state.overlayDrag;
+    drag.pointerId = event.pointerId;
+    drag.playerTarget = hit.frame.contentWindow;
+    drag.captureTarget = event.target;
+
+    if (drag.captureTarget && typeof drag.captureTarget.setPointerCapture === "function") {
+      try {
+        drag.captureTarget.setPointerCapture(event.pointerId);
+      } catch (error) {
+        // Window-level listeners continue receiving the usual pointer stream.
+      }
+    }
+
+    postOverlayPointer("DRIVE_OVERLAY_POINTER_DOWN", event, hit.frame);
+  }
+
+  function handleOverlayPointerMove(event) {
+    const drag = state.overlayDrag;
+    if (drag.pointerId !== event.pointerId || !drag.playerTarget) {
+      return;
+    }
+
+    const frame = findPlayerFrameBySource(drag.playerTarget);
+    if (!frame) {
+      cancelOverlayDrag(true);
+      return;
+    }
+
+    stopDrivePointerEvent(event);
+    postOverlayPointer("DRIVE_OVERLAY_POINTER_MOVE", event, frame);
+  }
+
+  function handleOverlayPointerUp(event) {
+    const drag = state.overlayDrag;
+    if (drag.pointerId !== event.pointerId || !drag.playerTarget) {
+      return;
+    }
+
+    const frame = findPlayerFrameBySource(drag.playerTarget);
+    stopDrivePointerEvent(event);
+    state.suppressClickUntil = Date.now() + DRAG_CLICK_SUPPRESSION_MS;
+    if (frame) {
+      postOverlayPointer("DRIVE_OVERLAY_POINTER_UP", event, frame);
+    }
+    cancelOverlayDrag(false);
+  }
+
+  function handleOverlayPointerCancel(event) {
+    if (state.overlayDrag.pointerId !== event.pointerId) {
+      return;
+    }
+    stopDrivePointerEvent(event);
+    cancelOverlayDrag(true);
+  }
+
+  function handleOverlayClick(event) {
+    if (Date.now() >= state.suppressClickUntil) {
+      return;
+    }
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+
+  function findOverlayHit(clientX, clientY) {
+    if (
+      !state.overlaySource ||
+      !state.overlayRects.length ||
+      Date.now() - state.overlayGeometryAt > OVERLAY_GEOMETRY_MAX_AGE_MS
+    ) {
+      return null;
+    }
+
+    const frame = findPlayerFrameBySource(state.overlaySource);
+    if (!frame) {
+      return null;
+    }
+
+    const frameRect = frame.getBoundingClientRect();
+    const localX = clientX - frameRect.left;
+    const localY = clientY - frameRect.top;
+    const inside = state.overlayRects.some((rect) => (
+      localX >= rect.x &&
+      localX <= rect.x + rect.width &&
+      localY >= rect.y &&
+      localY <= rect.y + rect.height
+    ));
+    return inside ? { frame, localX, localY } : null;
+  }
+
+  function findPlayerFrameBySource(source) {
+    return getPlayerFrames().find((frame) => frame.contentWindow === source) || null;
+  }
+
+  function postOverlayPointer(type, event, frame) {
+    const frameRect = frame.getBoundingClientRect();
+    postToPlayerFrame(frame.contentWindow, {
+      channel: CHANNEL,
+      type,
+      pointerId: event.pointerId,
+      clientX: event.clientX - frameRect.left,
+      clientY: event.clientY - frameRect.top
+    });
+  }
+
+  function stopDrivePointerEvent(event) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+
+  function cancelOverlayDrag(notifyPlayer) {
+    const drag = state.overlayDrag;
+    if (notifyPlayer && drag.playerTarget && drag.pointerId != null) {
+      postToPlayerFrame(drag.playerTarget, {
+        channel: CHANNEL,
+        type: "DRIVE_OVERLAY_POINTER_CANCEL",
+        pointerId: drag.pointerId,
+        clientX: 0,
+        clientY: 0
+      });
+    }
+
+    if (
+      drag.captureTarget &&
+      drag.pointerId != null &&
+      typeof drag.captureTarget.hasPointerCapture === "function" &&
+      typeof drag.captureTarget.releasePointerCapture === "function"
+    ) {
+      try {
+        if (drag.captureTarget.hasPointerCapture(drag.pointerId)) {
+          drag.captureTarget.releasePointerCapture(drag.pointerId);
+        }
+      } catch (error) {
+        // The browser may already have released capture after pointerup.
+      }
+    }
+
+    drag.pointerId = null;
+    drag.playerTarget = null;
+    drag.captureTarget = null;
   }
 
   async function loadDriveTranscript(fileId) {
