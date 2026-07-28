@@ -1670,7 +1670,7 @@
   }
 
   function requestDisableNativeCaptions(force) {
-    if (!state.settings.subtitleEnabled) {
+    if (!state.settings.subtitleEnabled || !state.cues.length) {
       return;
     }
 
