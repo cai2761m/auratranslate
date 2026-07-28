@@ -132,3 +132,69 @@ test("page bridge prefers the current player response after SPA navigation", () 
   assert.equal(postedMessages[0].videoId, "video-2");
   assert.equal(postedMessages[0].captionTracks[0].languageCode, "en");
 });
+
+test("page bridge reuses the player timedtext URL containing YouTube's proof token", () => {
+  const postedMessages = [];
+  const staticUrl =
+    "https://www.youtube.com/api/timedtext?v=video-asr&caps=asr&kind=asr&lang=en";
+  const playerUrl =
+    staticUrl +
+    "&potc=1&pot=proof-token&fmt=json3&c=WEB&cver=2.20260727.01.00";
+  const window = {
+    location: {
+      origin: "https://www.youtube.com",
+      href: "https://www.youtube.com/watch?v=video-asr"
+    },
+    ytInitialPlayerResponse: {
+      videoDetails: { videoId: "video-asr", title: "Automatic captions" },
+      captions: {
+        playerCaptionsTracklistRenderer: {
+          captionTracks: [
+            {
+              baseUrl: staticUrl,
+              languageCode: "en",
+              kind: "asr",
+              vssId: "a.en",
+              name: { simpleText: "English (auto-generated)" }
+            }
+          ]
+        }
+      }
+    },
+    addEventListener() {},
+    postMessage(message) {
+      postedMessages.push(message);
+    }
+  };
+  const document = {
+    addEventListener() {},
+    querySelector() {
+      return null;
+    }
+  };
+  const performance = {
+    getEntriesByType(type) {
+      assert.equal(type, "resource");
+      return [
+        { name: staticUrl + "&fmt=json3&c=WEB" },
+        { name: playerUrl }
+      ];
+    }
+  };
+
+  const source = fs.readFileSync(path.join(__dirname, "../src/page-bridge.js"), "utf8");
+  vm.runInNewContext(source, {
+    URL,
+    document,
+    performance,
+    window,
+    setInterval() {},
+    setTimeout(callback) {
+      callback();
+    }
+  });
+
+  assert.equal(postedMessages.length, 1);
+  assert.equal(postedMessages[0].captionTracks[0].baseUrl, playerUrl);
+  assert.equal(postedMessages[0].captionTracks[0].kind, "asr");
+});

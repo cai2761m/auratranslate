@@ -3,6 +3,7 @@
 
   const CHANNEL = "__ytbt_player_response__";
   let lastSignature = "";
+  const capturedCaptionUrls = new Map();
 
   function textFromName(name) {
     if (!name) {
@@ -118,9 +119,104 @@
     return "";
   }
 
-  function sanitizeTrack(track) {
+  function captionTrackKey(videoId, languageCode, kind) {
+    return [
+      String(videoId || ""),
+      String(languageCode || "").toLowerCase(),
+      String(kind || "").toLowerCase()
+    ].join(":");
+  }
+
+  function captionUrlQuality(url) {
+    let score = 0;
+    if (url.searchParams.has("pot")) {
+      score += 100;
+    }
+    if (url.searchParams.has("potc")) {
+      score += 10;
+    }
+    if (url.searchParams.get("fmt") === "json3") {
+      score += 2;
+    }
+    if (url.searchParams.get("c") === "WEB") {
+      score += 1;
+    }
+    return score;
+  }
+
+  function collectCapturedCaptionUrls(videoId) {
+    if (
+      !videoId ||
+      typeof performance === "undefined" ||
+      typeof performance.getEntriesByType !== "function"
+    ) {
+      return;
+    }
+
+    let entries = [];
+    try {
+      entries = performance.getEntriesByType("resource");
+    } catch (error) {
+      return;
+    }
+
+    for (const entry of entries) {
+      try {
+        const url = new URL(entry && entry.name || "", window.location.href);
+        const isYouTubeHost =
+          url.hostname === "youtube.com" ||
+          url.hostname.endsWith(".youtube.com");
+        if (
+          url.protocol !== "https:" ||
+          !isYouTubeHost ||
+          url.pathname !== "/api/timedtext" ||
+          url.searchParams.get("v") !== videoId ||
+          url.searchParams.has("tlang")
+        ) {
+          continue;
+        }
+
+        const languageCode = url.searchParams.get("lang") || "";
+        if (!languageCode) {
+          continue;
+        }
+
+        const key = captionTrackKey(
+          videoId,
+          languageCode,
+          url.searchParams.get("kind") || ""
+        );
+        const quality = captionUrlQuality(url);
+        const current = capturedCaptionUrls.get(key);
+        if (!current || quality >= current.quality) {
+          capturedCaptionUrls.set(key, {
+            quality,
+            url: url.toString()
+          });
+        }
+      } catch (error) {
+        // Ignore malformed or non-URL performance entries.
+      }
+    }
+  }
+
+  function capturedCaptionUrl(track, videoId) {
+    const languageCode = String(track.languageCode || "");
+    const kind =
+      String(track.kind || "") ||
+      (String(track.vssId || "").startsWith("a.") ? "asr" : "");
+    const exact = capturedCaptionUrls.get(
+      captionTrackKey(videoId, languageCode, kind)
+    );
+    const withoutKind = capturedCaptionUrls.get(
+      captionTrackKey(videoId, languageCode, "")
+    );
+    return (exact || withoutKind || {}).url || "";
+  }
+
+  function sanitizeTrack(track, videoId) {
     return {
-      baseUrl: track.baseUrl || "",
+      baseUrl: capturedCaptionUrl(track, videoId) || track.baseUrl || "",
       languageCode: track.languageCode || "",
       kind: track.kind || "",
       vssId: track.vssId || "",
@@ -179,7 +275,10 @@
       return;
     }
 
-    const sanitizedTracks = Array.isArray(tracks) ? tracks.map(sanitizeTrack) : [];
+    collectCapturedCaptionUrls(videoId);
+    const sanitizedTracks = Array.isArray(tracks)
+      ? tracks.map((track) => sanitizeTrack(track, videoId))
+      : [];
     const transcriptParams = findTranscriptParams(window.ytInitialData, 0);
     const innertubeApiKey = readYtcfgValue("INNERTUBE_API_KEY") || "";
     const innertubeContext =
