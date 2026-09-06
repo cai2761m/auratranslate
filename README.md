@@ -152,6 +152,10 @@ Subtitle translations are cached by:
 
 A new API request is expected when a cue has not been translated before, the API configuration changes, the source or target language changes, LLM sentence segmentation, ASR correction, or original technical-term display changes, the cache is cleared, or the segmentation/merge algorithm version changes. Sentence segmentation results are cached separately and reused for the same video, track, model, and source language.
 
+The extension also saves the latest 40 prepared caption timelines. Reloading restores the timeline and reads all available translations before queuing only missing cues. A fully cached video needs no caption fetch, segmentation, or translation request. Signed YouTube URLs, localized track names, and API-key rotation do not invalidate saved results. Parallel translation batches merge their writes in order, and successful results are acknowledged only after storage completes. Storage failures are reported instead of silently discarding translations.
+
+The translation cache defaults to roughly 2,000 cues, evicting the least recently updated video caches when needed (excluding the video currently being written). Evicted translations must be generated again. If a video's source captions have changed, clear the cache in Settings to fetch the updated captions.
+
 Immersive webpage translations are currently generated on demand and inserted into the page during the current session.
 
 ## Permissions
