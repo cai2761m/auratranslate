@@ -122,6 +122,85 @@ test("parseYouTubeTranscriptResponse extracts transcript segments", () => {
   assert.equal(cues[0].sourceText, "Hello world.");
 });
 
+test("parseYouTubeTranscriptPanelResponse parses mm:ss and hh:mm:ss timestamps", () => {
+  const cues = Core.parseYouTubeTranscriptPanelResponse({
+    panels: [
+      {
+        transcriptSegmentViewModel: {
+          simpleText: "Later cue",
+          timestamp: "1:02:03"
+        }
+      },
+      {
+        nested: {
+          transcriptSegmentViewModel: {
+            simpleText: " First &amp; cue ",
+            timestamp: "02:05"
+          }
+        }
+      }
+    ]
+  });
+
+  assert.deepEqual(cues, [
+    { startMs: 125000, endMs: 3723000, sourceText: "First & cue" },
+    { startMs: 3723000, endMs: 3728000, sourceText: "Later cue" }
+  ]);
+});
+
+test("parseYouTubeTranscriptPanelResponse uses timeline starts and ignores invalid nodes", () => {
+  const duplicate = {
+    transcriptSegmentViewModel: {
+      simpleText: "Fallback cue",
+      timestamp: "not-a-time"
+    }
+  };
+  const cues = Core.parseYouTubeTranscriptPanelResponse({
+    contents: [
+      {
+        deeply: {
+          nested: {
+            timelineItemViewModel: {
+              startTimeSeconds: 9.5,
+              contentItems: [duplicate, duplicate]
+            }
+          }
+        }
+      },
+      {
+        transcriptSegmentViewModel: {
+          simpleText: "Missing time",
+          timestamp: "invalid"
+        }
+      },
+      {
+        transcriptSegmentViewModel: {
+          simpleText: "   ",
+          timestamp: "00:12"
+        }
+      },
+      {
+        timelineItemViewModel: {
+          startTimeSeconds: null,
+          contentItems: [
+            {
+              transcriptSegmentViewModel: {
+                simpleText: "Invalid parent and timestamp",
+                timestamp: "1:2"
+              }
+            }
+          ]
+        }
+      },
+      null
+    ]
+  });
+
+  assert.deepEqual(cues, [
+    { startMs: 9500, endMs: 14500, sourceText: "Fallback cue" }
+  ]);
+});
+
 test("parseGoogleDriveTranscriptItems infers cue ends from the next timestamp", () => {
   const cues = Core.parseGoogleDriveTranscriptItems([
     { startMs: 8240, sourceText: " Second &amp; cleaned " },

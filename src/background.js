@@ -1,4 +1,9 @@
-importScripts("shared.js");
+// Chrome loads this file as a Manifest V3 service worker, while Firefox for
+// Android loads it as an event-page script together with shared.js. Keep the
+// import only for the service-worker case so the same manifest works in both.
+if (typeof importScripts === "function") {
+  importScripts("shared.js");
+}
 
 const Core = globalThis.YTBTCore;
 const MAX_RETRIES = 2;

@@ -29,6 +29,11 @@
   const DRAG_EDGE_PADDING_PX = 12;
   const DRIVE_OVERLAY_GEOMETRY_INTERVAL_MS = 250;
   const DRIVE_OVERLAY_GEOMETRY_REFRESH_MS = 2000;
+  const TRANSCRIPT_PANEL_ID = "PAmodern_transcript_view";
+  const TRANSCRIPT_PANEL_TIMEOUT_MS = 8000;
+  const TRANSCRIPT_PANEL_MAX_BODY_LENGTH = 20000000;
+  const TRANSCRIPT_CLIENT_VERSION_FALLBACK = "2.20260729.00.00";
+  const NATIVE_CAPTION_CAPTURE_TIMEOUT_MS = 7000;
   const NATIVE_CAPTION_SELECTOR = [
     ".ytp-caption-window-container",
     ".ytp-caption-window-rollup",
@@ -37,11 +42,7 @@
     ".caption-window",
     ".captions-text",
     ".caption-visual-line",
-    ".ytp-caption-segment",
-    ".html5-video-player [class*='caption' i]",
-    ".html5-video-player [id*='caption' i]",
-    ".html5-video-player [class*='subtitle' i]",
-    ".html5-video-player [id*='subtitle' i]"
+    ".ytp-caption-segment"
   ].join(",");
 
   const state = {
@@ -75,34 +76,45 @@
     video: null,
     nativeCaptionObserver: null,
     lastNativeCaptionSweepAt: 0,
-    lastNativeCaptionDisableRequestAt: 0,
     lastUrgentScheduleAt: 0,
     apiBackoffUntil: 0,
     apiBackoffMessage: "",
     apiBackoffTimer: null,
     bridgeInjected: false,
+    settingsLoaded: false,
+    pendingPlayerResponse: null,
+    captionLoadKey: "",
+    captionLoadPromise: null,
+    nativeCaptionWaiters: new Set(),
     pumping: false
   };
 
+  if (!IS_DRIVE_PLAYER) {
+    bindPageMessages();
+    injectPageBridge();
+  }
   init();
 
   async function init() {
     await loadSettings();
+    state.settingsLoaded = true;
     applySettings();
     if (IS_DRIVE_PLAYER) {
       bindDrivePlayerMessages();
       requestDriveTranscript();
       setInterval(requestDriveTranscript, 2000);
       setInterval(publishDriveOverlayGeometry, DRIVE_OVERLAY_GEOMETRY_INTERVAL_MS);
+    } else if (state.pendingPlayerResponse) {
+      const pendingPlayerResponse = state.pendingPlayerResponse;
+      state.pendingPlayerResponse = null;
+      handlePlayerResponse(pendingPlayerResponse);
     } else {
-      bindPageMessages();
-      injectPageBridge();
+      requestPlayerResponse();
     }
     bindStorageChanges();
     startNativeCaptionBlocker();
     setInterval(watchVideoElement, 1000);
     setInterval(() => updateNativeCaptionBlocking(true), 500);
-    setInterval(() => requestDisableNativeCaptions(false), 1000);
     setInterval(() => {
       if (state.cues.length) {
         scheduleTranslations(getCurrentTimeMs(), false);
@@ -259,7 +271,7 @@
   function applySettings() {
     document.documentElement.classList.toggle(
       "ytbt-hide-native-captions",
-      Boolean(state.settings.subtitleEnabled)
+      shouldBlockNativeCaptions()
     );
     updateNativeCaptionBlocking(true);
 
@@ -287,7 +299,6 @@
     script.async = false;
     script.onload = () => {
       script.remove();
-      requestPlayerResponse();
     };
     root.appendChild(script);
   }
@@ -313,8 +324,52 @@
         return;
       }
 
+      resolveNativeCaptionWaiters(data);
+      if (!state.settingsLoaded) {
+        state.pendingPlayerResponse = data;
+        return;
+      }
       handlePlayerResponse(data);
     });
+  }
+
+  function resolveNativeCaptionWaiters(payload) {
+    if (!state.nativeCaptionWaiters.size) {
+      return;
+    }
+
+    const videoId = String(payload && payload.videoId || "");
+    const tracks = Array.isArray(payload && payload.captionTracks) ? payload.captionTracks : [];
+    for (const waiter of Array.from(state.nativeCaptionWaiters)) {
+      if (waiter.videoId && videoId && waiter.videoId !== videoId) {
+        continue;
+      }
+      const track = tracks.find((candidate) => (
+        candidate &&
+        candidate.capturedText &&
+        isMatchingCaptionTrack(candidate, waiter.track)
+      ));
+      if (!track) {
+        continue;
+      }
+      state.nativeCaptionWaiters.delete(waiter);
+      clearTimeout(waiter.timer);
+      waiter.resolve(track);
+    }
+  }
+
+  function isMatchingCaptionTrack(candidate, requested) {
+    const candidateLanguage = String(candidate && candidate.languageCode || "").toLowerCase();
+    const requestedLanguage = String(requested && requested.languageCode || "").toLowerCase();
+    if (requestedLanguage && candidateLanguage && requestedLanguage !== candidateLanguage) {
+      return false;
+    }
+
+    const candidateKind = String(candidate && candidate.kind || "").toLowerCase() ||
+      (String(candidate && candidate.vssId || "").startsWith("a.") ? "asr" : "");
+    const requestedKind = String(requested && requested.kind || "").toLowerCase() ||
+      (String(requested && requested.vssId || "").startsWith("a.") ? "asr" : "");
+    return !requestedKind || !candidateKind || requestedKind === candidateKind;
   }
 
   function bindDrivePlayerMessages() {
@@ -474,13 +529,28 @@
     }
 
     const trackFingerprint = makeStableTrackFingerprint(videoId, track, transcript);
+    const captionLoadKey = makeCaptionLoadKey(trackFingerprint, track, transcript);
 
-    if (videoId === state.videoId && trackFingerprint === state.trackFingerprint && state.cues.length) {
-      return;
+    if (videoId === state.videoId && trackFingerprint === state.trackFingerprint) {
+      if (state.cues.length || captionLoadKey === state.captionLoadKey) {
+        if (state.captionLoadPromise) {
+          await state.captionLoadPromise;
+        }
+        return;
+      }
     }
 
     resetVideoState(videoId, track, trackFingerprint, transcript);
-    await loadCaptionTrack(videoId, track, trackFingerprint, transcript);
+    state.captionLoadKey = captionLoadKey;
+    const captionLoadPromise = loadCaptionTrack(videoId, track, trackFingerprint, transcript);
+    state.captionLoadPromise = captionLoadPromise;
+    try {
+      await captionLoadPromise;
+    } finally {
+      if (state.captionLoadPromise === captionLoadPromise) {
+        state.captionLoadPromise = null;
+      }
+    }
   }
 
   function resetVideoState(videoId, track, trackFingerprint, transcript) {
@@ -489,6 +559,8 @@
     state.transcript = transcript || null;
     state.trackFingerprint = trackFingerprint || "";
     state.translationTrackFingerprint = trackFingerprint || "";
+    state.captionLoadKey = "";
+    state.captionLoadPromise = null;
     state.cues = [];
     state.queue = [];
     state.inFlight.clear();
@@ -501,6 +573,7 @@
     if (track) {
       return Core.fingerprintText([
         "track",
+        "modern-panel-v1",
         videoId || "",
         sourceLang,
         String(track.languageCode || "").toLowerCase(),
@@ -512,9 +585,21 @@
 
     return Core.fingerprintText([
       "transcript",
+      "modern-panel-v1",
       videoId || "",
       sourceLang,
       transcript && transcript.apiKey ? "api" : ""
+    ].join("|"));
+  }
+
+  function makeCaptionLoadKey(trackFingerprint, track, transcript) {
+    const capturedText = String(track && track.capturedText || "");
+    return Core.fingerprintText([
+      trackFingerprint || "",
+      String(track && track.baseUrl || ""),
+      capturedText ? Core.fingerprintText(capturedText) : "",
+      String(transcript && transcript.params || ""),
+      String(transcript && transcript.clientVersion || "")
     ].join("|"));
   }
 
@@ -754,28 +839,39 @@
     const errors = [];
     let resolvedTranscript = transcript;
 
+    if (videoId) {
+      try {
+        setStatus("正在读取 YouTube 转写面板...");
+        return await fetchTranscriptPanelTrack(videoId, resolvedTranscript);
+      } catch (error) {
+        errors.push(`transcript panel: ${error.message || String(error)}`);
+      }
+    }
+
+    if (track && track.capturedText) {
+      try {
+        return parseCapturedCaptionText(track.capturedText);
+      } catch (error) {
+        errors.push(`captured timedtext: ${error.message || String(error)}`);
+      }
+    }
+
     if (track && track.baseUrl) {
       try {
         return await fetchCaptionTrack(track, videoId);
       } catch (error) {
         errors.push(`timedtext: ${error.message || String(error)}`);
-        if (hasTranscriptApi(resolvedTranscript)) {
-          setStatus("字幕轨道返回空内容，正在尝试 YouTube transcript...");
+        if (!isCaptionRateLimitError(error)) {
+          try {
+            setStatus("字幕接口不可用，正在请求播放器读取原生字幕...");
+            const capturedTrack = await requestNativeCaptionData(videoId, track);
+            if (capturedTrack && capturedTrack.capturedText) {
+              return parseCapturedCaptionText(capturedTrack.capturedText);
+            }
+          } catch (captureError) {
+            errors.push(`native player: ${captureError.message || String(captureError)}`);
+          }
         }
-      }
-    }
-
-    if (hasTranscriptApi(resolvedTranscript)) {
-      try {
-        setStatus("页面字幕为空，正在尝试 Innertube player 字幕轨道...");
-        const innertubeTracks = await fetchInnertubePlayerCaptionTracks(videoId, resolvedTranscript.apiKey);
-        const innertubeTrack = selectSourceTrack(innertubeTracks);
-        if (innertubeTrack) {
-          return await fetchCaptionTrack(innertubeTrack, videoId);
-        }
-        errors.push("innertube player: no English caption track");
-      } catch (error) {
-        errors.push(`innertube player: ${error.message || String(error)}`);
       }
     }
 
@@ -807,33 +903,9 @@
         parse: (text) => Core.parseJson3Captions(parseCaptionJson(text))
       },
       {
-        label: "vtt",
-        format: "vtt",
-        parse: (text) => Core.parseVttCaptions(text)
-      },
-      {
-        label: "srv3",
-        format: "srv3",
-        parse: (text) => Core.parseXmlCaptions(text)
-      },
-      {
-        label: "ttml",
-        format: "ttml",
-        parse: (text) => Core.parseXmlCaptions(text)
-      },
-      {
         label: "original",
         format: null,
-        parse: (text) => {
-          const trimmed = text.trim();
-          if (trimmed.startsWith("{")) {
-            return Core.parseJson3Captions(parseCaptionJson(trimmed));
-          }
-          if (trimmed.startsWith("WEBVTT")) {
-            return Core.parseVttCaptions(trimmed);
-          }
-          return Core.parseXmlCaptions(trimmed);
-        }
+        parse: parseCapturedCaptionText
       }
     ];
 
@@ -843,6 +915,7 @@
     for (let urlIndex = 0; urlIndex < baseUrls.length; urlIndex += 1) {
       const baseUrl = baseUrls[urlIndex];
       const sourceLabel = urlIndex === 0 ? "player" : `legacy${urlIndex}`;
+      let terminalError = null;
 
       for (const attempt of attempts) {
         try {
@@ -855,11 +928,37 @@
           errors.push(`${label}: no cues`);
         } catch (error) {
           errors.push(`${sourceLabel}/${attempt.label}: ${error.message || String(error)}`);
+          if (error && (error.captionHttpStatus || error.captionEmpty)) {
+            terminalError = error;
+            break;
+          }
         }
+      }
+      if (terminalError) {
+        throw terminalError;
       }
     }
 
     throw new Error(`No usable captions found (${errors.join("; ")}).`);
+  }
+
+  function parseCapturedCaptionText(text) {
+    const trimmed = String(text || "").trim();
+    if (!trimmed) {
+      throw new Error("empty response");
+    }
+    let cues;
+    if (trimmed.startsWith("{")) {
+      cues = Core.parseJson3Captions(parseCaptionJson(trimmed));
+    } else if (trimmed.startsWith("WEBVTT")) {
+      cues = Core.parseVttCaptions(trimmed);
+    } else {
+      cues = Core.parseXmlCaptions(trimmed);
+    }
+    if (!cues.length) {
+      throw new Error("response did not contain caption cues");
+    }
+    return cues;
   }
 
   function parseCaptionJson(text) {
@@ -885,7 +984,7 @@
       : [languageCode];
     const inferredKind = String(track.kind || "").trim() || (String(track.vssId || "").startsWith("a.") ? "asr" : "");
 
-    if (videoId) {
+    if (!urls.length && videoId) {
       for (const language of languages) {
         addCaptionUrl(urls, buildLegacyCaptionUrl(videoId, language, inferredKind));
         addCaptionUrl(urls, buildLegacyCaptionUrl(videoId, language, ""));
@@ -927,64 +1026,6 @@
     }
   }
 
-  async function fetchInnertubePlayerCaptionTracks(videoId, apiKey) {
-    const url = new URL("https://www.youtube.com/youtubei/v1/player");
-    url.searchParams.set("prettyPrint", "false");
-    url.searchParams.set("key", apiKey);
-
-    const response = await fetch(url.toString(), {
-      method: "POST",
-      credentials: "include",
-      cache: "no-store",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        context: {
-          client: {
-            clientName: "ANDROID",
-            clientVersion: "20.10.38"
-          }
-        },
-        videoId
-      })
-    });
-
-    const text = await response.text();
-    if (!response.ok) {
-      throw new Error(`player request failed (${response.status}): ${text.slice(0, 160)}`);
-    }
-
-    const json = parseCaptionJson(text);
-    const renderer =
-      json &&
-      json.captions &&
-      json.captions.playerCaptionsTracklistRenderer;
-    const tracks = renderer && Array.isArray(renderer.captionTracks) ? renderer.captionTracks : [];
-
-    return tracks.map((track) => ({
-      baseUrl: track.baseUrl || "",
-      languageCode: track.languageCode || "",
-      kind: track.kind || "",
-      vssId: track.vssId || "",
-      name: textFromCaptionName(track.name),
-      isTranslatable: Boolean(track.isTranslatable)
-    }));
-  }
-
-  function textFromCaptionName(name) {
-    if (!name) {
-      return "";
-    }
-    if (typeof name.simpleText === "string") {
-      return name.simpleText;
-    }
-    if (Array.isArray(name.runs)) {
-      return name.runs.map((run) => run.text || "").join("");
-    }
-    return "";
-  }
-
   async function fetchCaptionText(baseUrl, format, label) {
     const url = captionUrlWithFormat(baseUrl, format);
     const response = await fetch(url, {
@@ -996,10 +1037,14 @@
     });
     const text = await response.text();
     if (!response.ok) {
-      throw new Error(`Timedtext request failed (${response.status})`);
+      const error = new Error(`Timedtext request failed (${response.status})`);
+      error.captionHttpStatus = response.status;
+      throw error;
     }
     if (!text.trim()) {
-      throw new Error(`${label || format || "caption"} returned empty response`);
+      const error = new Error(`${label || format || "caption"} returned empty response`);
+      error.captionEmpty = true;
+      throw error;
     }
     return text;
   }
@@ -1010,6 +1055,164 @@
       url.searchParams.set("fmt", format);
     }
     return url.toString();
+  }
+
+  async function fetchTranscriptPanelTrack(videoId, transcript) {
+    const params = transcriptPanelParams(videoId);
+    if (!params) {
+      throw new Error("invalid video id");
+    }
+
+    const detectedVersion = String(
+      transcript && (
+        transcript.clientVersion ||
+        (transcript.context && transcript.context.client && transcript.context.client.clientVersion)
+      ) || ""
+    );
+    const versions = Array.from(new Set([
+      detectedVersion,
+      TRANSCRIPT_CLIENT_VERSION_FALLBACK
+    ].filter(Boolean)));
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), TRANSCRIPT_PANEL_TIMEOUT_MS);
+    const errors = [];
+
+    try {
+      for (const clientVersion of versions) {
+        try {
+          const cues = await requestTranscriptPanel(params, clientVersion, transcript, controller.signal);
+          if (cues.length) {
+            return cues;
+          }
+          errors.push(`${clientVersion}: no transcript segments`);
+        } catch (error) {
+          errors.push(`${clientVersion}: ${error.message || String(error)}`);
+          if (error && error.transcriptPanelStatus === 429) {
+            break;
+          }
+        }
+      }
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    throw new Error(errors.join("; ") || "transcript panel is unavailable");
+  }
+
+  async function requestTranscriptPanel(params, clientVersion, transcript, signal) {
+    const url = new URL("/youtubei/v1/get_panel", window.location.origin);
+    url.searchParams.set("prettyPrint", "false");
+    const contextClient = transcript && transcript.context && transcript.context.client || {};
+    let response;
+    try {
+      response = await fetch(url.toString(), {
+        method: "POST",
+        credentials: "include",
+        cache: "no-store",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          context: {
+            client: {
+              clientName: "WEB",
+              clientVersion,
+              hl: String(contextClient.hl || "en"),
+              gl: String(contextClient.gl || "US")
+            }
+          },
+          panelId: TRANSCRIPT_PANEL_ID,
+          params
+        }),
+        signal
+      });
+    } catch (error) {
+      if (error && error.name === "AbortError") {
+        throw new Error("request timed out");
+      }
+      throw error;
+    }
+
+    const text = await response.text();
+    if (!response.ok) {
+      const error = new Error(`request failed (${response.status})`);
+      error.transcriptPanelStatus = response.status;
+      throw error;
+    }
+    if (text.length > TRANSCRIPT_PANEL_MAX_BODY_LENGTH) {
+      throw new Error("response was too large");
+    }
+
+    const json = parseCaptionJson(text);
+    const cues = Core.parseYouTubeTranscriptPanelResponse(json);
+    if (!cues.length) {
+      throw new Error("response did not contain transcript segments");
+    }
+    return cues;
+  }
+
+  function transcriptPanelParams(videoId) {
+    const id = String(videoId || "");
+    if (!/^[\w-]{1,64}$/.test(id)) {
+      return "";
+    }
+
+    const bytes = [0xaa, 0x09, id.length + 4, 0x0a, id.length];
+    for (let index = 0; index < id.length; index += 1) {
+      bytes.push(id.charCodeAt(index) & 0xff);
+    }
+    bytes.push(0x18, 0x01);
+
+    let binary = "";
+    for (const byte of bytes) {
+      binary += String.fromCharCode(byte);
+    }
+    try {
+      return btoa(binary);
+    } catch (error) {
+      return "";
+    }
+  }
+
+  function requestNativeCaptionData(videoId, track) {
+    if (!videoId || !track) {
+      return Promise.reject(new Error("caption track is unavailable"));
+    }
+
+    return new Promise((resolve, reject) => {
+      const waiter = {
+        videoId,
+        track,
+        resolve,
+        timer: null
+      };
+      waiter.timer = setTimeout(() => {
+        state.nativeCaptionWaiters.delete(waiter);
+        reject(new Error("player caption capture timed out"));
+      }, NATIVE_CAPTION_CAPTURE_TIMEOUT_MS);
+      state.nativeCaptionWaiters.add(waiter);
+      window.postMessage(
+        {
+          channel: CHANNEL,
+          type: "REQUEST_NATIVE_CAPTIONS",
+          videoId,
+          track: {
+            baseUrl: String(track.baseUrl || ""),
+            languageCode: String(track.languageCode || ""),
+            kind: String(track.kind || ""),
+            vssId: String(track.vssId || "")
+          }
+        },
+        window.location.origin
+      );
+    });
+  }
+
+  function isCaptionRateLimitError(error) {
+    return Boolean(error && (
+      error.captionHttpStatus === 429 ||
+      /\b429\b/.test(String(error.message || error))
+    ));
   }
 
   function hasTranscriptApi(transcript) {
@@ -1111,8 +1314,17 @@
 
   function formatCaptionLoadError(error) {
     const message = error && error.message ? error.message : String(error);
-    if (message.includes("returned empty response") || message.includes("No usable captions found")) {
-      return "YouTube 返回空字幕数据；已尝试 timedtext 和 transcript。请确认原生 CC 能显示英文字幕，或换一个有英文字幕的视频测试。";
+    if (/\b429\b/.test(message)) {
+      return "YouTube 暂时限制了字幕请求（HTTP 429）。扩展已停止连续重试，请等待几分钟后刷新页面。";
+    }
+    if (message.includes("returned empty response")) {
+      return "YouTube 字幕接口返回空内容，播放器校验令牌可能尚未就绪。请稍后刷新，或先打开一次原生 CC。";
+    }
+    if (message.includes("FAILED_PRECONDITION") || message.includes("Precondition check failed")) {
+      return "YouTube 旧版转写接口已拒绝请求，且现代转写面板暂时不可用。请稍后刷新页面。";
+    }
+    if (message.includes("No usable captions found")) {
+      return `YouTube 没有返回可用字幕：${Core.normalizeSubtitleText(message).slice(0, 180)}`;
     }
     return message;
   }
@@ -1536,7 +1748,6 @@
     if (state.video) {
       state.video.addEventListener("seeked", handleSeek);
       state.video.addEventListener("loadedmetadata", handleSeek);
-      disableBrowserTextTracks();
     }
   }
 
@@ -1596,7 +1807,7 @@
     }
 
     state.nativeCaptionObserver = new MutationObserver((mutations) => {
-      if (!state.settings.subtitleEnabled) {
+      if (!shouldBlockNativeCaptions()) {
         return;
       }
 
@@ -1626,21 +1837,25 @@
     }
     state.lastNativeCaptionSweepAt = Date.now();
 
-    if (state.settings.subtitleEnabled) {
+    const shouldBlock = shouldBlockNativeCaptions();
+    document.documentElement.classList.toggle("ytbt-hide-native-captions", shouldBlock);
+    if (shouldBlock) {
       restoreProtectedPlayerContainers();
-      requestDisableNativeCaptions(Boolean(force));
       hideNativeCaptionNodeTree(document);
       if (!IS_DRIVE_PLAYER) {
         hideCaptionLikePlayerOverlays();
       }
-      disableBrowserTextTracks();
     } else {
       restoreNativeCaptionNodes();
     }
   }
 
+  function shouldBlockNativeCaptions() {
+    return Boolean(state.settings.subtitleEnabled && state.cues.length);
+  }
+
   function hideNativeCaptionNodeTree(root) {
-    if (!root || !state.settings.subtitleEnabled) {
+    if (!root || !shouldBlockNativeCaptions()) {
       return;
     }
 
@@ -1665,7 +1880,7 @@
   }
 
   function hideCaptionLikePlayerOverlays() {
-    const player = document.querySelector(".html5-video-player") || document.querySelector("#movie_player");
+    const player = findVideoPlayer();
     if (!player) {
       return;
     }
@@ -1694,7 +1909,7 @@
   }
 
   function isLikelyNativeCaptionOverlay(node, playerRect) {
-    if (!node || !state.settings.subtitleEnabled) {
+    if (!node || !shouldBlockNativeCaptions()) {
       return false;
     }
     if (Core.isProtectedVideoContainer(node, state.overlay)) {
@@ -1807,50 +2022,8 @@
     }
   }
 
-  function requestDisableNativeCaptions(force) {
-    if (!state.settings.subtitleEnabled || !state.cues.length) {
-      return;
-    }
-
-    const now = Date.now();
-    if (!force && now - state.lastNativeCaptionDisableRequestAt < 900) {
-      return;
-    }
-    state.lastNativeCaptionDisableRequestAt = now;
-
-    try {
-      const subtitleButton = document.querySelector(".ytp-subtitles-button");
-      if (subtitleButton && subtitleButton.getAttribute("aria-pressed") === "true") {
-        subtitleButton.click();
-      }
-    } catch (error) {
-      // Ignore transient YouTube UI state.
-    }
-
-    window.postMessage(
-      {
-        channel: CHANNEL,
-        type: "DISABLE_NATIVE_CAPTIONS"
-      },
-      window.location.origin
-    );
-  }
-
-  function disableBrowserTextTracks() {
-    const video = state.video || document.querySelector("video");
-    if (!video || !video.textTracks) {
-      return;
-    }
-
-    for (const track of video.textTracks) {
-      if (track && track.mode !== "disabled") {
-        track.mode = "disabled";
-      }
-    }
-  }
-
   function ensureOverlay() {
-    const player = document.querySelector(".html5-video-player") || document.querySelector("#movie_player");
+    const player = findVideoPlayer();
     if (!player) {
       return null;
     }
@@ -2205,9 +2378,13 @@
   function getOverlayPlayer() {
     return (
       (state.overlay && state.overlay.parentElement && state.overlay.parentElement.closest(".html5-video-player, #movie_player")) ||
-      document.querySelector(".html5-video-player") ||
-      document.querySelector("#movie_player")
+      findVideoPlayer()
     );
+  }
+
+  function findVideoPlayer() {
+    return document.querySelector(".html5-video-player") ||
+      document.querySelector("#movie_player");
   }
 
   function clamp(value, min, max) {
