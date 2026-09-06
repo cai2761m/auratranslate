@@ -11,6 +11,11 @@ const CACHE_PREFIX = "ytbt:";
 // scan on every write. Reset on service-worker restart; refreshed on demand.
 let cachedItemCount = null;
 const inFlightCueTranslations = new Map();
+const inFlightSentenceSegmentations = new Map();
+// Keep paid results available if a storage write fails, and while a request that
+// read an older storage snapshot catches up with a just-completed batch.
+const completedCueTranslations = new Map();
+let translationCacheWriteQueue = Promise.resolve();
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message) {
@@ -68,15 +73,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 function storageGet(defaults) {
-  return new Promise((resolve) => chrome.storage.local.get(defaults, resolve));
+  return new Promise((resolve, reject) => chrome.storage.local.get(defaults, (values) => {
+    const error = chrome.runtime.lastError;
+    if (error) reject(new Error(`Unable to read subtitle cache: ${error.message}`));
+    else resolve(values);
+  }));
 }
 
 function storageSet(values) {
-  return new Promise((resolve) => chrome.storage.local.set(values, resolve));
+  return new Promise((resolve, reject) => chrome.storage.local.set(values, () => {
+    const error = chrome.runtime.lastError;
+    if (error) reject(new Error(`Unable to save subtitle cache: ${error.message}`));
+    else resolve();
+  }));
 }
 
 function storageRemove(keys) {
-  return new Promise((resolve) => chrome.storage.local.remove(keys, resolve));
+  return new Promise((resolve, reject) => chrome.storage.local.remove(keys, () => {
+    const error = chrome.runtime.lastError;
+    if (error) reject(new Error(`Unable to remove subtitle cache: ${error.message}`));
+    else resolve();
+  }));
 }
 
 async function handleSegmentSubtitles(message) {
@@ -150,25 +167,31 @@ async function handleSegmentSubtitles(message) {
     }
   }
 
-  const groups = await segmentSubtitleCues({
-    translationConfig,
-    sourceLanguage,
-    cues
-  });
-  Core.applySentenceSegmentationGroups(cues, groups);
-  await persistSentenceSegmentationCache(
-    cacheKey,
-    {
-      kind: "sentence-segmentation",
-      inputFingerprint,
-      groups,
-      updatedAt: Date.now(),
-      provider: translationConfig.provider,
-      model: translationConfig.model,
-      sourceLanguage,
-      version: Core.SENTENCE_SEGMENTATION_VERSION
-    }
-  );
+  let pendingSegmentation = inFlightSentenceSegmentations.get(cacheKey);
+  if (!pendingSegmentation) {
+    pendingSegmentation = (async () => {
+      const groups = await segmentSubtitleCues({ translationConfig, sourceLanguage, cues });
+      Core.applySentenceSegmentationGroups(cues, groups);
+      await persistSentenceSegmentationCache(cacheKey, {
+        kind: "sentence-segmentation",
+        inputFingerprint,
+        groups,
+        updatedAt: Date.now(),
+        provider: translationConfig.provider,
+        model: translationConfig.model,
+        sourceLanguage,
+        version: Core.SENTENCE_SEGMENTATION_VERSION
+      });
+      return groups;
+    })();
+    inFlightSentenceSegmentations.set(cacheKey, pendingSegmentation);
+    pendingSegmentation.finally(() => {
+      if (inFlightSentenceSegmentations.get(cacheKey) === pendingSegmentation) {
+        inFlightSentenceSegmentations.delete(cacheKey);
+      }
+    }).catch(() => {});
+  }
+  const groups = await pendingSegmentation;
 
   return {
     type: "SEGMENT_SUBTITLES_RESULT",
@@ -253,32 +276,10 @@ async function handleTranslateBatch(message) {
   const showOriginalTechnicalTerms = settings.showOriginalTechnicalTerms !== false;
   const translationConfig = Core.resolveTranslationConfig(settings);
 
-  if (!translationConfig.apiKey) {
-    return {
-      type: "TRANSLATE_RESULT",
-      ok: false,
-      videoId: message.videoId,
-      batchId: message.batchId,
-      items: [],
-      errors: [{ code: "missing_api_key", message: `${translationConfig.providerLabel} API Key is not configured.` }]
-    };
-  }
-
   const endpointUrl =
     translationConfig.apiStyle === "gemini"
       ? translationConfig.generateContentUrl
       : translationConfig.chatCompletionsUrl;
-  if (!endpointUrl || !translationConfig.model) {
-    return {
-      type: "TRANSLATE_RESULT",
-      ok: false,
-      videoId: message.videoId,
-      batchId: message.batchId,
-      items: [],
-      errors: [{ code: "missing_provider_config", message: `${translationConfig.providerLabel} base URL or model is not configured.` }]
-    };
-  }
-
   const cues = Array.isArray(message.cues) ? message.cues : [];
   const legacyCacheKeyParts = [
     message.videoId || "",
@@ -343,8 +344,9 @@ async function handleTranslateBatch(message) {
     const cachedSourceFingerprint =
       cachedValue && typeof cachedValue === "object" ? cachedValue.sourceFingerprint : "";
     const sourceMatchesCache =
-      !llmSentenceSegmentationEnabled ||
-      cachedSourceFingerprint === Core.fingerprintText(sourceText);
+      cachedSourceFingerprint
+        ? cachedSourceFingerprint === Core.fingerprintText(sourceText)
+        : !llmSentenceSegmentationEnabled;
     if (cachedText && sourceMatchesCache) {
       const cachedItem = { id, translatedText: cachedText, cached: true };
       if (cachedValue && typeof cachedValue === "object" && cachedValue.displaySourceText) {
@@ -359,7 +361,7 @@ async function handleTranslateBatch(message) {
     }
   }
 
-  if (!missingCues.length) {
+  if (message.cacheOnly === true || !missingCues.length) {
     return {
       type: "TRANSLATE_RESULT",
       ok: true,
@@ -370,6 +372,21 @@ async function handleTranslateBatch(message) {
     };
   }
 
+  if (!translationConfig.apiKey || !endpointUrl || !translationConfig.model) {
+    const missingKey = !translationConfig.apiKey;
+    return {
+      type: "TRANSLATE_RESULT",
+      ok: false,
+      videoId: message.videoId,
+      batchId: message.batchId,
+      items: cachedItems,
+      errors: [{
+        code: missingKey ? "missing_api_key" : "missing_provider_config",
+        message: `${translationConfig.providerLabel} ${missingKey ? "API Key" : "base URL or model"} is not configured.`
+      }]
+    };
+  }
+
   const translatedItems = await translateMissingCues({
     cacheKey,
     translationConfig,
@@ -377,40 +394,33 @@ async function handleTranslateBatch(message) {
     sourceLanguage,
     asrCorrectionEnabled,
     showOriginalTechnicalTerms,
-    cues: missingCues
-  });
-
-  const mergedCacheItems = Object.assign({}, cacheValue.items || {});
-  for (const item of translatedItems) {
-    if (llmSentenceSegmentationEnabled) {
-      mergedCacheItems[item.id] = {
-        translatedText: item.translatedText,
-        displaySourceText: item.displaySourceText || "",
-        sourceFingerprint: Core.fingerprintText(sourceTextById.get(String(item.id)) || "")
-      };
-    } else {
-      mergedCacheItems[item.id] = item.displaySourceText
-        ? { translatedText: item.translatedText, displaySourceText: item.displaySourceText }
-        : item.translatedText;
+    cues: missingCues,
+    async persistItems(items) {
+      const newCacheItems = {};
+      for (const item of items) {
+        newCacheItems[item.id] = {
+          translatedText: item.translatedText,
+          displaySourceText: item.displaySourceText || "",
+          sourceFingerprint: Core.fingerprintText(sourceTextById.get(String(item.id)) || "")
+        };
+      }
+      await persistTranslationCache({
+        cacheKey,
+        cacheValue: {
+          items: newCacheItems,
+          updatedAt: Date.now(),
+          provider: translationConfig.provider,
+          model: translationConfig.model,
+          baseUrl: translationConfig.baseUrl,
+          targetLanguage,
+          sourceLanguage,
+          asrCorrectionEnabled,
+          llmSentenceSegmentationEnabled,
+          showOriginalTechnicalTerms
+        },
+        maxItems: Number(settings.translationCacheMaxItems) || Core.DEFAULT_CACHE_MAX_ITEMS
+      });
     }
-  }
-
-  await persistTranslationCache({
-    cacheKey,
-    cacheValue: {
-      items: mergedCacheItems,
-      updatedAt: Date.now(),
-      provider: translationConfig.provider,
-      model: translationConfig.model,
-      baseUrl: translationConfig.baseUrl,
-      targetLanguage,
-      sourceLanguage,
-      asrCorrectionEnabled,
-      llmSentenceSegmentationEnabled,
-      showOriginalTechnicalTerms
-    },
-    addedCount: translatedItems.length,
-    maxItems: Number(settings.translationCacheMaxItems) || Core.DEFAULT_CACHE_MAX_ITEMS
   });
 
   return {
@@ -490,6 +500,8 @@ function inFlightCueKey(cacheKey, cueId, sourceText) {
 
 async function translateMissingCues(request) {
   const pendingCues = [];
+  const retainedItems = [];
+  const ownedCues = [];
   const sharedPromises = [];
 
   for (const cue of request.cues) {
@@ -498,14 +510,35 @@ async function translateMissingCues(request) {
     if (existing) {
       sharedPromises.push(existing);
     } else {
-      pendingCues.push(cue);
+      ownedCues.push(cue);
+      const completed = completedCueTranslations.get(key);
+      if (completed) retainedItems.push(completed);
+      else pendingCues.push(cue);
     }
   }
 
-  let newItems = [];
-  if (pendingCues.length) {
-    const batchPromise = translateWithRetry(Object.assign({}, request, { cues: pendingCues }));
-    for (const cue of pendingCues) {
+  if (ownedCues.length) {
+    const batchPromise = (async () => {
+      const newItems = pendingCues.length
+        ? await translateWithRetry(Object.assign({}, request, { cues: pendingCues }))
+        : [];
+      for (const item of newItems) {
+        const cue = pendingCues.find((entry) => String(entry.id) === String(item.id));
+        if (cue) {
+          completedCueTranslations.set(inFlightCueKey(request.cacheKey, cue.id, cue.sourceText), item);
+        }
+      }
+      const items = retainedItems.concat(newItems);
+      // A refresh must keep sharing this result until it is durably stored.
+      // If storage fails, the retained result lets a retry save it without
+      // making another paid provider request.
+      await request.persistItems(items);
+      while (completedCueTranslations.size > Core.DEFAULT_CACHE_MAX_ITEMS) {
+        completedCueTranslations.delete(completedCueTranslations.keys().next().value);
+      }
+      return items;
+    })();
+    for (const cue of ownedCues) {
       const key = inFlightCueKey(request.cacheKey, cue.id, cue.sourceText);
       const itemPromise = batchPromise.then((items) => {
         return items.find((entry) => String(entry.id) === String(cue.id)) || null;
@@ -518,7 +551,6 @@ async function translateMissingCues(request) {
       }).catch(() => {});
       sharedPromises.push(itemPromise);
     }
-    newItems = await batchPromise;
   }
 
   const settledSharedItems = sharedPromises.length ? await Promise.allSettled(sharedPromises) : [];
@@ -535,12 +567,12 @@ async function translateMissingCues(request) {
   }
 
   const itemsById = new Map();
-  for (const item of newItems.concat(sharedItems)) {
+  for (const item of sharedItems) {
     if (item && item.id != null && item.translatedText) {
       itemsById.set(String(item.id), item);
     }
   }
-  if (!itemsById.size && firstSharedError) {
+  if (firstSharedError) {
     throw firstSharedError;
   }
   return Array.from(itemsById.values());
@@ -847,7 +879,15 @@ function delay(ms) {
 // keys when the total cached-cue count would exceed the configured ceiling.
 // Eviction granularity is per video (each `ytbt:` key), matching the natural
 // "least recently watched video" semantics.
-async function persistTranslationCache({ cacheKey, cacheValue, addedCount, maxItems }) {
+function persistTranslationCache(request) {
+  // The read, merge, eviction and write form one operation. Parallel batches
+  // must not each overwrite the same video's cache from an older snapshot.
+  const write = translationCacheWriteQueue.then(() => writeTranslationCache(request));
+  translationCacheWriteQueue = write.catch(() => {});
+  return write;
+}
+
+async function writeTranslationCache({ cacheKey, cacheValue, maxItems }) {
   const latest = await storageGet({ [cacheKey]: { items: {}, updatedAt: 0 } });
   const latestValue = latest[cacheKey] || { items: {}, updatedAt: 0 };
   const latestItems = latestValue.items && typeof latestValue.items === "object" ? latestValue.items : {};
@@ -857,31 +897,25 @@ async function persistTranslationCache({ cacheKey, cacheValue, addedCount, maxIt
     items: Object.assign({}, latestItems, incomingItems),
     updatedAt: Date.now()
   });
-  addedCount = actualAddedCount;
-
   // Lazily initialize the in-memory count once per service-worker lifetime.
   if (cachedItemCount == null) {
     cachedItemCount = await countCachedTranslationItems();
   }
 
-  cachedItemCount += addedCount;
-
-  if (cachedItemCount > maxItems) {
-    const evicted = await evictOldestCacheKeys(cachedItemCount - maxItems, cacheKey);
-    cachedItemCount -= evicted.freedItems;
-  }
+  let nextItemCount = cachedItemCount + actualAddedCount;
 
   try {
-    await storageSet({ [cacheKey]: cacheValue });
-  } catch (error) {
-    // The in-memory count may have drifted (e.g. external clears). On a write
-    // failure, recompute from storage and retry the eviction once before giving up.
-    cachedItemCount = await countCachedTranslationItems();
-    if (cachedItemCount > maxItems) {
-      const evicted = await evictOldestCacheKeys(cachedItemCount - maxItems, cacheKey);
-      cachedItemCount -= evicted.freedItems;
+    if (nextItemCount > maxItems) {
+      const evicted = await evictOldestCacheKeys(nextItemCount - maxItems, cacheKey);
+      nextItemCount -= evicted.freedItems;
     }
     await storageSet({ [cacheKey]: cacheValue });
+    cachedItemCount = nextItemCount;
+  } catch (error) {
+    // A failed write/removal must be visible, and cannot advance the count.
+    // Re-read it on the next save in case some eviction already succeeded.
+    cachedItemCount = null;
+    throw error;
   }
 }
 

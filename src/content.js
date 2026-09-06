@@ -19,6 +19,8 @@
   const CUSTOM_MAX_PARALLEL_BATCHES = 4;
   const TRANSLATION_MESSAGE_TIMEOUT_MS = 130000;
   const SEGMENTATION_MESSAGE_TIMEOUT_MS = 600000;
+  const PREPARED_CAPTION_CACHE_PREFIX = "ytbt:prepared:";
+  const MAX_PREPARED_CAPTION_CACHE_ENTRIES = 40;
   const PRIORITY_WINDOW_MS = 120000;
   const URGENT_RESCHEDULE_MS = 1000;
   const RATE_LIMIT_BACKOFF_MS = 60000;
@@ -50,6 +52,7 @@
     track: null,
     transcript: null,
     trackFingerprint: "",
+    translationTrackFingerprint: "",
     cues: [],
     queue: [],
     inFlight: new Map(),
@@ -109,11 +112,27 @@
   }
 
   function storageGet(defaults) {
-    return new Promise((resolve) => chrome.storage.local.get(defaults, resolve));
+    return new Promise((resolve, reject) => chrome.storage.local.get(defaults, (values) => {
+      const error = chrome.runtime && chrome.runtime.lastError;
+      if (error) reject(new Error(`读取本地字幕缓存失败：${error.message}`));
+      else resolve(values);
+    }));
   }
 
   function storageSet(values) {
-    return new Promise((resolve) => chrome.storage.local.set(values, resolve));
+    return new Promise((resolve, reject) => chrome.storage.local.set(values, () => {
+      const error = chrome.runtime && chrome.runtime.lastError;
+      if (error) reject(new Error(`保存本地字幕缓存失败：${error.message}`));
+      else resolve();
+    }));
+  }
+
+  function storageRemove(keys) {
+    return new Promise((resolve, reject) => chrome.storage.local.remove(keys, () => {
+      const error = chrome.runtime && chrome.runtime.lastError;
+      if (error) reject(new Error(`整理本地字幕缓存失败：${error.message}`));
+      else resolve();
+    }));
   }
 
   async function loadSettings() {
@@ -183,8 +202,10 @@
       const needsSentenceSegmentationReload = Boolean(
         changes.llmSentenceSegmentationEnabled ||
         changes.sourceLanguage ||
-        (state.settings.llmSentenceSegmentationEnabled &&
-          (realtimeApiChanged || changes.cacheVersion))
+        changes.targetLanguage ||
+        changes.asrCorrectionEnabled ||
+        changes.showOriginalTechnicalTerms ||
+        realtimeApiChanged || changes.cacheVersion
       );
 
       if (needsSentenceSegmentationReload && state.driveTranscriptPayload) {
@@ -410,6 +431,9 @@
     const token = state.loadingToken;
 
     try {
+      if (await restorePreparedCaptionCues(videoId, trackFingerprint, token)) {
+        return;
+      }
       await prepareCaptionCues(
         rawCues,
         videoId,
@@ -464,6 +488,7 @@
     state.track = track;
     state.transcript = transcript || null;
     state.trackFingerprint = trackFingerprint || "";
+    state.translationTrackFingerprint = trackFingerprint || "";
     state.cues = [];
     state.queue = [];
     state.inFlight.clear();
@@ -531,6 +556,9 @@
     setStatus("正在读取 YouTube 字幕轨道...");
 
     try {
+      if (await restorePreparedCaptionCues(videoId, trackFingerprint, token)) {
+        return;
+      }
       const rawCues = await fetchCaptionData(track, videoId, transcript);
       await prepareCaptionCues(
         rawCues,
@@ -545,6 +573,117 @@
       }
       setStatus(`字幕读取失败：${formatCaptionLoadError(error)}`);
     }
+  }
+
+  function preparedCaptionCacheKey(videoId, trackFingerprint) {
+    const settings = state.settings;
+    const config = Core.resolveTranslationConfig(settings);
+    const track = state.track;
+    // Track names and signed caption URLs change across page loads. Keep the
+    // saved cue layout independent of those display/transport details.
+    const trackIdentity = IS_DRIVE_PLAYER
+      ? ["drive"]
+      : ["youtube", track && track.languageCode || "", track && track.kind || "", track && track.vssId || ""];
+    const parts = [
+      videoId, ...trackIdentity, settings.sourceLanguage,
+      Core.MERGE_VERSION, settings.cacheVersion || "1",
+      settings.llmSentenceSegmentationEnabled ? "llm" : "local"
+    ];
+    if (settings.llmSentenceSegmentationEnabled) {
+      parts.push(config.provider, config.apiStyle === "gemini" ? config.generateContentUrl : config.chatCompletionsUrl,
+        config.model, Core.SENTENCE_SEGMENTATION_VERSION);
+    }
+    return PREPARED_CAPTION_CACHE_PREFIX + Core.fingerprintText(JSON.stringify(parts));
+  }
+
+  function isCurrentCaptionLoad(videoId, trackFingerprint, token) {
+    return token === state.loadingToken && videoId === state.videoId && trackFingerprint === state.trackFingerprint;
+  }
+
+  function validPreparedCaptionCache(value, videoId) {
+    if (!value || value.version !== 1 || value.videoId !== videoId ||
+        !value.trackFingerprint || !Array.isArray(value.cues) || !value.cues.length) return false;
+    const ids = new Set();
+    return value.cues.every((cue, index) => {
+      if (!cue || cue.id == null || !String(cue.id) || ids.has(String(cue.id)) ||
+          !Number.isFinite(cue.startMs) || !Number.isFinite(cue.endMs) || cue.startMs < 0 ||
+          cue.endMs <= cue.startMs || typeof cue.sourceText !== "string" || !Core.normalizeSubtitleText(cue.sourceText) ||
+          (index > 0 && cue.startMs < value.cues[index - 1].startMs)) return false;
+      ids.add(String(cue.id));
+      return true;
+    });
+  }
+
+  async function restorePreparedCaptionCues(videoId, trackFingerprint, token) {
+    const key = preparedCaptionCacheKey(videoId, trackFingerprint);
+    const stored = await storageGet({ [key]: null });
+    if (!isCurrentCaptionLoad(videoId, trackFingerprint, token)) return true;
+    const cached = stored[key];
+    if (!validPreparedCaptionCache(cached, videoId)) return false;
+    // Reuse the original cache namespace even if YouTube localized the track's
+    // name since the saved translation. The cue source and ids are unchanged.
+    state.translationTrackFingerprint = cached.trackFingerprint;
+    await activateCaptionCues(cached.cues, videoId, trackFingerprint, token);
+    return true;
+  }
+
+  async function persistPreparedCaptionCues(cues, videoId, trackFingerprint, token) {
+    const key = preparedCaptionCacheKey(videoId, trackFingerprint);
+    const value = {
+      version: 1, videoId, trackFingerprint, updatedAt: Date.now(),
+      cues: cues.map((cue) => ({
+        id: String(cue.id), startMs: cue.startMs, endMs: cue.endMs,
+        sourceText: cue.sourceText, displaySourceText: cue.displaySourceText || ""
+      }))
+    };
+    const all = await storageGet(null);
+    if (!isCurrentCaptionLoad(videoId, trackFingerprint, token)) return;
+    const olderKeys = Object.keys(all)
+      .filter((entry) => entry.startsWith(PREPARED_CAPTION_CACHE_PREFIX) && entry !== key)
+      .sort((left, right) => (Number(all[right] && all[right].updatedAt) || 0) - (Number(all[left] && all[left].updatedAt) || 0));
+    const staleKeys = olderKeys.splice(MAX_PREPARED_CAPTION_CACHE_ENTRIES - 1);
+    if (staleKeys.length) {
+      await storageRemove(staleKeys);
+    }
+    // Long videos can reach the byte quota before the entry-count limit.
+    // Free older timelines and retry the same data, without paying for it again.
+    while (isCurrentCaptionLoad(videoId, trackFingerprint, token)) {
+      try {
+        await storageSet({ [key]: value });
+        return;
+      } catch (error) {
+        if (!/quota|QUOTA_BYTES/i.test(error.message) || !olderKeys.length) throw error;
+        await storageRemove([olderKeys.pop()]);
+      }
+    }
+  }
+
+  async function activateCaptionCues(cues, videoId, trackFingerprint, token, fallbackMessage) {
+    // Read every existing translation before publishing cues to the scheduler.
+    // This read-only request must never start a paid API call.
+    const response = await sendMessage({
+      type: "TRANSLATE_BATCH", cacheOnly: true, videoId,
+      trackFingerprint: state.translationTrackFingerprint || trackFingerprint,
+      cues: cues.map((cue) => ({ id: cue.id, sourceText: cue.sourceText }))
+    });
+    if (!isCurrentCaptionLoad(videoId, trackFingerprint, token)) return;
+    if (!response || response.ok === false) {
+      const error = response && response.errors && response.errors[0];
+      throw new Error(`读取本地翻译缓存失败，已暂停翻译：${error && error.message || "后台无响应"}`);
+    }
+    const prepared = cues.map((cue) => Object.assign({}, cue, { status: "pending", translatedText: "" }));
+    const items = response.items || [];
+    const cachedIds = new Set(items.filter((item) => item && item.translatedText).map((item) => String(item.id)));
+    applyTranslations({ cues: prepared.filter((cue) => cachedIds.has(String(cue.id))) }, items);
+    state.cues = prepared;
+    if (fallbackMessage) {
+      setStatus(`LLM 智能断句失败，已回退本地断句：${fallbackMessage}`);
+    }
+    if (prepared.every((cue) => cue.status === "translated")) {
+      setStatus(`已从本地缓存恢复 ${prepared.length}/${prepared.length} 条字幕。`);
+      return;
+    }
+    scheduleTranslations(getCurrentTimeMs(), true);
   }
 
   async function prepareCaptionCues(rawCues, videoId, trackFingerprint, token, sourceLabel) {
@@ -604,13 +743,11 @@
       return;
     }
 
-    state.cues = preparedCues;
-    if (segmentationFallbackMessage) {
-      setStatus(`LLM 智能断句失败，已回退本地断句：${segmentationFallbackMessage}`);
-    } else {
-      setStatus(`正在预翻译字幕 0/${preparedCues.length}...`);
+    if (!state.settings.llmSentenceSegmentationEnabled || hasApiKey()) {
+      await persistPreparedCaptionCues(preparedCues, videoId, trackFingerprint, token);
     }
-    scheduleTranslations(getCurrentTimeMs(), true);
+    if (!isCurrentCaptionLoad(videoId, trackFingerprint, token)) return;
+    await activateCaptionCues(preparedCues, videoId, trackFingerprint, token, segmentationFallbackMessage);
   }
 
   async function fetchCaptionData(track, videoId, transcript) {
@@ -1052,6 +1189,7 @@
           id: `${state.videoId}:${state.trackFingerprint}:${Date.now()}:${state.batchSerial += 1}`,
           videoId: state.videoId,
           trackFingerprint: state.trackFingerprint,
+          translationTrackFingerprint: state.translationTrackFingerprint,
           cues
         };
 
@@ -1074,7 +1212,7 @@
         type: "TRANSLATE_BATCH",
         batchId: batch.id,
         videoId: batch.videoId,
-        trackFingerprint: batch.trackFingerprint,
+        trackFingerprint: batch.translationTrackFingerprint || batch.trackFingerprint,
         cues: batch.cues.map((cue) => ({
           id: cue.id,
           sourceText: cue.sourceText
