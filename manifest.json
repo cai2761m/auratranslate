@@ -1,22 +1,36 @@
 {
   "manifest_version": 3,
   "name": "AuraTranslate",
-  "version": "0.2.3",
-  "description": "AuraTranslate - AI bilingual subtitles and immersive webpage translation",
+  "version": "0.3.0",
+  "description": "AuraTranslate - AI bilingual subtitles and immersive webpage translation on desktop and Android Firefox",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "auratranslate@cai2761m.github.io",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": ["websiteContent", "authenticationInfo"]
+      }
+    },
+    "gecko_android": {
+      "strict_min_version": "142.0"
+    }
+  },
   "permissions": ["storage"],
   "host_permissions": [
     "https://www.youtube.com/*",
+    "https://m.youtube.com/*",
     "https://*/*",
     "http://*/*",
     "http://localhost/*",
     "http://127.0.0.1/*"
   ],
   "background": {
-    "service_worker": "src/background.js"
+    "service_worker": "src/background.js",
+    "scripts": ["src/shared.js", "src/background.js"]
   },
   "content_scripts": [
     {
-      "matches": ["https://www.youtube.com/*"],
+      "matches": ["https://www.youtube.com/*", "https://m.youtube.com/*"],
       "js": ["src/shared.js", "src/content.js"],
       "css": ["src/overlay.css"],
       "run_at": "document_start"
@@ -43,10 +57,14 @@
   "web_accessible_resources": [
     {
       "resources": ["src/page-bridge.js"],
-      "matches": ["https://www.youtube.com/*"]
+      "matches": ["https://www.youtube.com/*", "https://m.youtube.com/*"]
     }
   ],
   "options_page": "options/options.html",
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
   "action": {
     "default_title": "AuraTranslate",
     "default_popup": "popup/popup.html"

@@ -6,10 +6,6 @@ html.ytbt-hide-native-captions .html5-video-player .caption-window,
 html.ytbt-hide-native-captions .html5-video-player .captions-text,
 html.ytbt-hide-native-captions .html5-video-player .caption-visual-line,
 html.ytbt-hide-native-captions .html5-video-player .ytp-caption-segment,
-html.ytbt-hide-native-captions .html5-video-player [class*="caption" i],
-html.ytbt-hide-native-captions .html5-video-player [id*="caption" i],
-html.ytbt-hide-native-captions .html5-video-player [class*="subtitle" i],
-html.ytbt-hide-native-captions .html5-video-player [id*="subtitle" i],
 html.ytbt-hide-native-captions .ytp-caption-window-container,
 html.ytbt-hide-native-captions .caption-window,
 [data-ytbt-native-caption-hidden="true"] {
@@ -103,4 +99,39 @@ html.ytbt-hide-native-captions .caption-window,
 body.ytbt-fullscreen .ytbt-overlay,
 .html5-video-player.ytp-fullscreen .ytbt-overlay {
   bottom: calc(9% + 42px);
+}
+
+/* YouTube's mobile player is much smaller than the desktop player. Keep the
+   overlay inside the video surface and above the touch controls. */
+@media (max-width: 600px) {
+  .ytbt-overlay {
+    width: 96%;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 48px);
+    line-height: 1.2;
+  }
+
+  .ytbt-lines,
+  .ytbt-status {
+    padding: 4px 7px;
+    border-radius: 4px;
+  }
+
+  .ytbt-cn {
+    font-size: calc(21px * var(--ytbt-font-scale));
+  }
+
+  .ytbt-en {
+    margin-top: 2px;
+    font-size: calc(14px * var(--ytbt-font-scale));
+  }
+
+  .ytbt-status {
+    max-width: 92vw;
+    font-size: calc(13px * var(--ytbt-font-scale));
+  }
+
+  body.ytbt-fullscreen .ytbt-overlay,
+  .html5-video-player.ytp-fullscreen .ytbt-overlay {
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 52px);
+  }
 }

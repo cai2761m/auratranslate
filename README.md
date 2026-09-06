@@ -27,6 +27,29 @@ The extension does not perform audio recognition. Video subtitle translation is 
 5. Select the project folder.
 6. Click the AuraTranslate extension icon, then click `Settings` to configure API keys.
 
+### Android (Firefox for Android)
+
+Android Chrome cannot install browser extensions directly. AuraTranslate now includes Firefox for Android compatibility (Firefox for Android 142 or later). It runs on YouTube in Firefox, not inside the native YouTube app.
+
+For development testing, connect an Android device to your computer over USB/Wi-Fi:
+
+```powershell
+npm install --global web-ext
+adb devices
+web-ext run --target=firefox-android --android-device=<device-id> --firefox-apk=org.mozilla.firefox
+```
+
+For normal distribution, use a Mozilla-signed `.xpi` package:
+
+1. In Firefox for Android, open **Settings → About Firefox**.
+2. Tap the Firefox logo five times to unlock the developer menu.
+3. Return to **Settings** and choose **Install Extension from File**.
+4. Select the signed `.xpi` file and confirm installation.
+
+After installation, open AuraTranslate from Firefox's extensions menu, enter your translation API key, and visit a YouTube video with English captions. Portrait mode, landscape mode, and touch-drag subtitle positioning are supported.
+
+Note: a temporary development extension may be removed when Firefox exits; regular users should install a Mozilla-signed package. Google Chrome for Android and the native YouTube app are not supported.
+
 ## Usage
 
 ### YouTube Subtitles

@@ -33,6 +33,29 @@
 4. 选择下载或克隆的项目文件夹。
 5. 点击扩展图标打开设置页面，配置翻译 API。
 
+### Android（Firefox for Android）
+
+Android 版 Chrome 不能直接安装浏览器扩展。本项目现在提供 Firefox for Android 兼容配置（Firefox for Android 142 或更高版本），使用的是 Firefox 中的 YouTube 网页版，不是 YouTube 原生 App。
+
+开发测试需要电脑通过 USB/Wi‑Fi 连接 Android 手机：
+
+```powershell
+npm install --global web-ext
+adb devices
+web-ext run --target=firefox-android --android-device=<设备ID> --firefox-apk=org.mozilla.firefox
+```
+
+正式分发时，请使用 Mozilla 签名后的 `.xpi` 文件：
+
+1. 在 Firefox for Android 中打开“设置 → 关于 Firefox”。
+2. 连续点击 Firefox 图标五次，解锁开发菜单。
+3. 返回“设置”，选择“从文件安装扩展”。
+4. 选择签名后的 `.xpi` 文件并确认安装。
+
+安装后，在 Firefox 的扩展菜单中打开 AuraTranslate 设置，填写翻译服务 API Key；然后用 Firefox 打开带英文字幕的 YouTube 视频。横屏、竖屏和触摸拖动字幕均已适配。
+
+注意：Firefox Android 的临时测试扩展在退出浏览器后可能被移除；普通用户应使用 Mozilla 签名的扩展包。Google Chrome Android 和 YouTube 原生 App 不支持本扩展。
+
 ## 使用方法
 
 1. 打开任意带有英文字幕的 YouTube 视频，或带有转写内容的 Google Drive 视频。

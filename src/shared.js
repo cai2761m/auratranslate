@@ -669,6 +669,100 @@
     return cues.sort((left, right) => left.startMs - right.startMs);
   }
 
+  function transcriptPanelTimestampToMs(value) {
+    const raw = String(value == null ? "" : value).trim();
+    const parts = raw.split(":");
+    if (parts.length !== 2 && parts.length !== 3) {
+      return NaN;
+    }
+
+    const hasValidShape = parts.length === 2
+      ? /^\d+:\d{2}$/.test(raw)
+      : /^\d+:\d{2}:\d{2}$/.test(raw);
+    if (!hasValidShape) {
+      return NaN;
+    }
+
+    const numbers = parts.map(Number);
+    const seconds = numbers[numbers.length - 1];
+    const minutes = numbers[numbers.length - 2];
+    if (seconds >= 60 || (parts.length === 3 && minutes >= 60)) {
+      return NaN;
+    }
+
+    const hours = parts.length === 3 ? numbers[0] : 0;
+    return ((hours * 60 + minutes) * 60 + seconds) * 1000;
+  }
+
+  function collectTranscriptPanelSegments(value, segments, parentStartMs, depth) {
+    if (!value || depth > 32) {
+      return;
+    }
+
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        collectTranscriptPanelSegments(item, segments, parentStartMs, depth + 1);
+      }
+      return;
+    }
+
+    if (typeof value !== "object") {
+      return;
+    }
+
+    if (value.transcriptSegmentViewModel) {
+      const segment = value.transcriptSegmentViewModel;
+      const sourceText = normalizeSubtitleText(segment && segment.simpleText);
+      const timestampMs = transcriptPanelTimestampToMs(segment && segment.timestamp);
+      const startMs = Number.isFinite(timestampMs) ? timestampMs : parentStartMs;
+      if (sourceText && Number.isFinite(startMs) && startMs >= 0) {
+        segments.push({ startMs, sourceText });
+      }
+    }
+
+    for (const [key, item] of Object.entries(value)) {
+      if (key === "timelineItemViewModel" && item && typeof item === "object") {
+        const rawStartTimeSeconds = item.startTimeSeconds;
+        const startTimeSeconds = rawStartTimeSeconds == null || rawStartTimeSeconds === ""
+          ? NaN
+          : Number(rawStartTimeSeconds);
+        const timelineStartMs = Number.isFinite(startTimeSeconds) && startTimeSeconds >= 0
+          ? startTimeSeconds * 1000
+          : parentStartMs;
+        collectTranscriptPanelSegments(item, segments, timelineStartMs, depth + 1);
+      } else {
+        collectTranscriptPanelSegments(item, segments, parentStartMs, depth + 1);
+      }
+    }
+  }
+
+  function parseYouTubeTranscriptPanelResponse(json) {
+    const segments = [];
+    collectTranscriptPanelSegments(json, segments, NaN, 0);
+    segments.sort((left, right) => left.startMs - right.startMs);
+
+    const unique = [];
+    const seen = new Set();
+    for (const segment of segments) {
+      const key = `${segment.startMs}:${segment.sourceText}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      unique.push(segment);
+    }
+
+    return unique.map((segment, index) => {
+      const next = unique[index + 1];
+      const endMs = next ? next.startMs : segment.startMs + 5000;
+      return {
+        startMs: segment.startMs,
+        endMs: Math.max(segment.startMs + 1, endMs),
+        sourceText: segment.sourceText
+      };
+    });
+  }
+
   function parseGoogleDriveTranscriptItems(items, finalEndMs) {
     const normalized = [];
     const seen = new Set();
@@ -1420,6 +1514,7 @@
     parseVttTime,
     parseXmlCaptions,
     parseYouTubeTranscriptResponse,
+    parseYouTubeTranscriptPanelResponse,
     parseGoogleDriveTranscriptItems,
     findYouTubeTranscriptParams,
     mergeCaptionFragments,
