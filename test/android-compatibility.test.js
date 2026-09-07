@@ -14,7 +14,8 @@ test("manifest includes the Firefox for Android compatibility surface", () => {
     .flatMap((entry) => entry.matches || [])
     .filter((match) => match.includes("youtube.com"));
 
-  assert.equal(manifest.version, "0.3.0");
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+  assert.equal(manifest.version, pkg.version);
   assert.equal(manifest.browser_specific_settings.gecko.id, "auratranslate@cai2761m.github.io");
   assert.deepEqual(
     manifest.browser_specific_settings.gecko.data_collection_permissions.required,

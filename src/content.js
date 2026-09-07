@@ -66,6 +66,7 @@
     lastDriveOverlayGeometrySignature: "",
     overlayDrag: {
       pointerId: null,
+      touchId: null,
       captureTarget: null,
       active: false,
       offsetX: 0,
@@ -2033,24 +2034,29 @@
     }
 
     const overlay = state.overlay || document.createElement("div");
-    overlay.className = "ytbt-overlay ytbt-no-cue ytbt-no-status";
-    overlay.setAttribute("aria-live", "polite");
-    overlay.dataset.ytbtVersion = chrome.runtime.getManifest().version;
-    overlay.style.setProperty("--ytbt-font-scale", String(state.settings.fontScale));
-    overlay.innerHTML = [
-      '<div class="ytbt-lines">',
-      '  <div class="ytbt-cn"></div>',
-      '  <div class="ytbt-en"></div>',
-      "</div>",
-      '<div class="ytbt-status"></div>'
-    ].join("");
-
-    state.overlay = overlay;
-    state.overlayParts = {
-      cn: overlay.querySelector(".ytbt-cn"),
-      en: overlay.querySelector(".ytbt-en"),
-      status: overlay.querySelector(".ytbt-status")
-    };
+    if (!state.overlay) {
+      overlay.className = "ytbt-overlay ytbt-no-cue ytbt-no-status";
+      overlay.setAttribute("aria-live", "polite");
+      overlay.dataset.ytbtVersion = chrome.runtime.getManifest().version;
+      overlay.style.setProperty("--ytbt-font-scale", String(state.settings.fontScale));
+      overlay.innerHTML = [
+        '<div class="ytbt-lines">',
+        '  <div class="ytbt-cn"></div>',
+        '  <div class="ytbt-en"></div>',
+        "</div>",
+        '<div class="ytbt-status"></div>'
+      ].join("");
+      state.overlay = overlay;
+      state.overlayParts = {
+        cn: overlay.querySelector(".ytbt-cn"),
+        en: overlay.querySelector(".ytbt-en"),
+        status: overlay.querySelector(".ytbt-status")
+      };
+    } else {
+      // Moving to a replacement/fullscreen player must retain the subtitle
+      // nodes and their listeners, not recreate unbound drag surfaces.
+      cancelOverlayDrag();
+    }
     bindOverlayDragHandlers(overlay);
     player.appendChild(overlay);
     applySettings();
@@ -2066,9 +2072,98 @@
     for (const surface of overlay.querySelectorAll(".ytbt-lines, .ytbt-status")) {
       surface.addEventListener("pointerdown", handleOverlayPointerDown, true);
     }
+    // Mobile player controls can sit above the subtitles in another layer.
+    // Capture touches before the player's handlers and hit-test only the
+    // visible subtitle surfaces; other player gestures stay untouched.
+    window.addEventListener("touchstart", handleOverlayTouchStart, { capture: true, passive: false });
+    window.addEventListener("contextmenu", handleOverlayContextMenu, true);
+  }
+
+  function findOverlayTouchSurface(clientX, clientY) {
+    const overlay = state.overlay;
+    if (!state.settings.subtitleEnabled || !overlay || overlay.hidden || !overlay.isConnected) {
+      return null;
+    }
+    const player = getOverlayPlayer();
+    const playerRect = player && player.getBoundingClientRect();
+    if (!playerRect || clientX < playerRect.left || clientX > playerRect.right ||
+        clientY < playerRect.top || clientY > playerRect.bottom) {
+      return null;
+    }
+    for (const surface of overlay.querySelectorAll(".ytbt-lines, .ytbt-status")) {
+      const rect = surface.getBoundingClientRect();
+      const style = window.getComputedStyle(surface);
+      if (style.display !== "none" && style.visibility !== "hidden" &&
+          rect.width > 0 && rect.height > 0 && clientX >= rect.left &&
+          clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom) {
+        return surface;
+      }
+    }
+    return null;
+  }
+
+  function stopOverlayTouchEvent(event) {
+    if (event.cancelable) event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+
+  function handleOverlayTouchStart(event) {
+    if (state.overlayDrag.touchId != null || event.touches.length !== 1) {
+      return;
+    }
+    const touch = event.changedTouches[0];
+    if (!touch || !findOverlayTouchSurface(touch.clientX, touch.clientY)) {
+      return;
+    }
+    stopOverlayTouchEvent(event);
+    // Use a separate identity from PointerEvent ids. Firefox can emit both
+    // streams for one finger; only the touch stream owns this gesture.
+    beginOverlayDrag(`touch:${touch.identifier}`, touch.clientX, touch.clientY, null);
+    state.overlayDrag.touchId = touch.identifier;
+    window.addEventListener("touchmove", handleOverlayTouchMove, { capture: true, passive: false });
+    window.addEventListener("touchend", handleOverlayTouchEnd, { capture: true, passive: false });
+    window.addEventListener("touchcancel", handleOverlayTouchCancel, { capture: true, passive: false });
+  }
+
+  function activeOverlayTouch(event) {
+    return Array.from(event.changedTouches).find((touch) => touch.identifier === state.overlayDrag.touchId);
+  }
+
+  function handleOverlayTouchMove(event) {
+    const touch = activeOverlayTouch(event);
+    if (!touch) return;
+    stopOverlayTouchEvent(event);
+    state.overlayDrag.lastClientX = touch.clientX;
+    state.overlayDrag.lastClientY = touch.clientY;
+    moveOverlayToPointer(touch.clientX, touch.clientY);
+  }
+
+  function handleOverlayTouchEnd(event) {
+    const touch = activeOverlayTouch(event);
+    if (!touch) return;
+    stopOverlayTouchEvent(event);
+    moveOverlayToPointer(touch.clientX, touch.clientY);
+    saveOverlayPosition();
+    cancelOverlayDrag();
+  }
+
+  function handleOverlayTouchCancel(event) {
+    if (!activeOverlayTouch(event)) return;
+    stopOverlayTouchEvent(event);
+    cancelOverlayDrag();
+  }
+
+  function handleOverlayContextMenu(event) {
+    if (state.overlayDrag.touchId != null) stopOverlayTouchEvent(event);
   }
 
   function handleOverlayPointerDown(event) {
+    // Touch Events also prevent the player's separate touch/scroll handlers.
+    // Keep Pointer Events for mice, pens and pointer-only touch environments.
+    if (state.overlayDrag.touchId != null ||
+        (event.pointerType === "touch" && "ontouchstart" in window)) {
+      return;
+    }
     if (!state.settings.subtitleEnabled || !state.overlay) {
       return;
     }
@@ -2226,7 +2321,7 @@
   }
 
   function handleOverlayMouseUpFallback(event) {
-    if (state.overlayDrag.pointerId == null) {
+    if (state.overlayDrag.pointerId == null || state.overlayDrag.touchId != null) {
       return;
     }
     event.preventDefault();
@@ -2295,12 +2390,16 @@
     document.removeEventListener("pointerup", handleOverlayPointerUp, true);
     document.removeEventListener("pointercancel", handleOverlayPointerCancel, true);
     document.removeEventListener("mouseup", handleOverlayMouseUpFallback, true);
+    window.removeEventListener("touchmove", handleOverlayTouchMove, true);
+    window.removeEventListener("touchend", handleOverlayTouchEnd, true);
+    window.removeEventListener("touchcancel", handleOverlayTouchCancel, true);
 
     if (state.overlay) {
       state.overlay.classList.remove("ytbt-dragging");
     }
 
     drag.pointerId = null;
+    drag.touchId = null;
     drag.captureTarget = null;
     drag.active = false;
   }
@@ -2314,7 +2413,8 @@
     if (!position) {
       state.overlay.style.left = "50%";
       state.overlay.style.top = "";
-      state.overlay.style.bottom = "calc(8% + 44px)";
+      // Let the mobile/fullscreen CSS choose the default control-bar offset.
+      state.overlay.style.bottom = "";
       state.overlay.style.transform = "translateX(-50%)";
       return;
     }
