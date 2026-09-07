@@ -54,6 +54,8 @@ web-ext run --target=firefox-android --android-device=<设备ID> --firefox-apk=o
 
 安装后，在 Firefox 的扩展菜单中打开 AuraTranslate 设置，填写翻译服务 API Key；然后用 Firefox 打开带英文字幕的 YouTube 视频。横屏、竖屏和触摸拖动字幕均已适配。
 
+**0.3.1 手机拖动修复**：按住字幕文字后直接移动，松手保存位置。此版本增加独立触摸事件处理，并修复播放器更换容器后拖动事件丢失的问题。如果手机已安装 0.3.0，需要在 Mozilla 开发者中心为同一个扩展上传 0.3.1 新版本，取得签名后的 `.xpi` 再安装更新；仅更新 GitHub 源码不会更新手机里的扩展。此修复已通过自动化交互测试，仍需 Android 真机验证。
+
 注意：Firefox Android 的临时测试扩展在退出浏览器后可能被移除；普通用户应使用 Mozilla 签名的扩展包。Google Chrome Android 和 YouTube 原生 App 不支持本扩展。
 
 ## 使用方法

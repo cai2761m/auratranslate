@@ -48,6 +48,8 @@ For normal distribution, use a Mozilla-signed `.xpi` package:
 
 After installation, open AuraTranslate from Firefox's extensions menu, enter your translation API key, and visit a YouTube video with English captions. Portrait mode, landscape mode, and touch-drag subtitle positioning are supported.
 
+**0.3.1 touch-drag fix**: touch the subtitle text and move your finger; release to save its position. This version adds a dedicated touch-event path and preserves drag listeners when the player container is replaced. To update an existing 0.3.0 installation, upload 0.3.1 as a new version of the same add-on in the Mozilla Developer Hub and install the resulting signed `.xpi`. Updating the GitHub source alone does not update the installed extension. Automated interaction tests cover this fix; Android device verification is still needed.
+
 Note: a temporary development extension may be removed when Firefox exits; regular users should install a Mozilla-signed package. Google Chrome for Android and the native YouTube app are not supported.
 
 ## Usage
