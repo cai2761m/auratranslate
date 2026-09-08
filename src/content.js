@@ -155,8 +155,7 @@
 
   function normalizeSettings(settings) {
     const merged = Object.assign({}, Core.DEFAULT_SETTINGS, settings || {});
-    const fontScale = Number(merged.fontScale);
-    merged.fontScale = Number.isFinite(fontScale) ? Math.min(1.8, Math.max(0.7, fontScale)) : 1;
+    merged.fontScale = Core.normalizeFontScale(merged.fontScale);
     merged.subtitleEnabled = merged.subtitleEnabled !== false;
     merged.llmSentenceSegmentationEnabled = merged.llmSentenceSegmentationEnabled !== false;
     merged.showOriginalTechnicalTerms = merged.showOriginalTechnicalTerms !== false;

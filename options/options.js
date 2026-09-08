@@ -44,7 +44,10 @@
       targetLanguage.value = settings.targetLanguage || Core.DEFAULT_SETTINGS.targetLanguage;
     }
     if (fontScale) {
-      fontScale.value = settings.fontScale || Core.DEFAULT_SETTINGS.fontScale;
+      fontScale.min = String(Core.FONT_SCALE_MIN);
+      fontScale.max = String(Core.FONT_SCALE_MAX);
+      fontScale.step = String(Core.FONT_SCALE_STEP);
+      fontScale.value = Core.normalizeFontScale(settings.fontScale);
     }
     if (subtitleEnabled) {
       subtitleEnabled.checked = settings.subtitleEnabled !== false;
@@ -148,7 +151,7 @@
       showOriginalTechnicalTerms: readChecked(showOriginalTechnicalTerms, true),
       sourceLanguage: readValue(sourceLanguage, Core.DEFAULT_SETTINGS.sourceLanguage),
       targetLanguage: readValue(targetLanguage, Core.DEFAULT_SETTINGS.targetLanguage),
-      fontScale: Number(readValue(fontScale, Core.DEFAULT_SETTINGS.fontScale)),
+      fontScale: Core.normalizeFontScale(readValue(fontScale, Core.DEFAULT_SETTINGS.fontScale)),
       subtitleEnabled: readChecked(subtitleEnabled, true)
     });
     showStatus("设置已保存。");
@@ -194,7 +197,7 @@
 
   function updateFontScaleLabel() {
     if (fontScaleValue && fontScale) {
-      fontScaleValue.textContent = `${Number(fontScale.value || 1).toFixed(1)}x`;
+      fontScaleValue.textContent = `${Core.normalizeFontScale(fontScale.value).toFixed(2)}x`;
     }
   }
 

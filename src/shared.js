@@ -26,6 +26,18 @@
   });
 
   const DEEPSEEK_MODEL = "deepseek-v4-flash";
+  const FONT_SCALE_MIN = 0.3;
+  const FONT_SCALE_MAX = 3;
+  const FONT_SCALE_STEP = 0.05;
+
+  function normalizeFontScale(value) {
+    if (value == null || value === "" || typeof value === "boolean") return DEFAULT_SETTINGS.fontScale;
+    const scale = Number(value);
+    return Number.isFinite(scale)
+      ? Math.min(FONT_SCALE_MAX, Math.max(FONT_SCALE_MIN, scale))
+      : DEFAULT_SETTINGS.fontScale;
+  }
+
   const GEMINI_MODEL = "gemini-3.5-flash";
   const MERGE_VERSION = "5";
   const SENTENCE_SEGMENTATION_VERSION = "1";
@@ -1555,6 +1567,10 @@
 
   const api = {
     DEFAULT_SETTINGS,
+    FONT_SCALE_MIN,
+    FONT_SCALE_MAX,
+    FONT_SCALE_STEP,
+    normalizeFontScale,
     DEEPSEEK_MODEL,
     GEMINI_MODEL,
     DEEPSEEK_BASE_URL,

@@ -72,7 +72,7 @@ function createDragHarness({ mobile = false } = {}) {
     dataset: {},
     parentElement: player,
     style: {
-      setProperty() {}
+      setProperty(name, value) { this[name] = value; }
     },
     classList: {
       toggle(name, enabled) {
@@ -155,6 +155,7 @@ function createDragHarness({ mobile = false } = {}) {
       "",
       "  globalThis.__YTBTDragTest = {",
       "    state,",
+      "    normalizeSettings, applySettings,",
       "    bindOverlayDragHandlers,",
       "    ensureOverlay,",
       "    applyOverlayPosition,",
@@ -177,6 +178,15 @@ function createDragHarness({ mobile = false } = {}) {
     get saveCount() { return saveCount; }
   };
 }
+
+test("subtitle overlay applies the expanded font scale to its CSS variable", () => {
+  const { api, overlay } = createDragHarness({ mobile: true });
+  for (const scale of [0.3, 0.55, 0.65, 3]) {
+    api.state.settings = api.normalizeSettings({ fontScale: scale });
+    api.applySettings();
+    assert.equal(overlay.style["--ytbt-font-scale"], String(scale));
+  }
+});
 
 test("subtitle overlay starts dragging immediately and saves its position", () => {
   const {

@@ -52,6 +52,8 @@ After installation, open AuraTranslate from Firefox's extensions menu, enter you
 
 **0.3.2 background connection recovery**: in response to reports of `Receiving end does not exist` after seeking on Android, explicit pre-delivery connection failures now get up to three short reconnect attempts. Persistent failures show a recovery hint; seeking again retries undelivered failed cues without resetting translated or in-flight cues. Ambiguous port-closure errors are not automatically replayed by the transport. Automated tests cover reconnects, seeking, and background-script startup, but the reported issue has not yet been reproduced and verified on an Android device. Upload **0.3.2** as a new version of the same Mozilla add-on, install its signed `.xpi` on the phone, and refresh existing YouTube tabs.
 
+**0.3.3 font-size range**: Settings → Font Scale now supports 0.30–3.00x in 0.05x steps. If subtitles feel too large on a phone, try 0.55x and save settings. Existing values are preserved; resizing does not retranslate subtitles. Upload 0.3.3 for Mozilla signing, update the phone with the signed `.xpi`, then refresh existing video tabs.
+
 Note: a temporary development extension may be removed when Firefox exits; regular users should install a Mozilla-signed package. Google Chrome for Android and the native YouTube app are not supported.
 
 ## Usage
@@ -109,7 +111,7 @@ By default, immersive translation reuses the real-time subtitle API. Select a pr
 | Original Technical Terms | Appends source-language terms after translated subtitle terminology; enabled by default |
 | Source Language | Currently English |
 | Target Language | Simplified Chinese or Traditional Chinese |
-| Font Scale | Subtitle overlay size, from `0.7x` to `1.8x` |
+| Font Scale | Subtitle overlay size, from `0.30x` to `3.00x` in `0.05x` steps; default `1.00x` |
 | Subtitle Enabled | Enables the custom subtitle overlay and hides native YouTube CC captions |
 
 ## Provider Notes
