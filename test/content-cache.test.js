@@ -273,6 +273,23 @@ test("refresh restores every translated cue without fetching, segmenting, or pai
   assert.equal(refreshed.calls.cacheOnly.flatMap((call) => call.cues).length, 42);
 });
 
+test("saving smaller and larger font scales updates content without retranslating cues", async () => {
+  const storage = sharedStorage();
+  const page = await seedPage(storage, new Map());
+  page.api.bindStorageChanges();
+  const before = viewCues(page);
+  const paidCount = page.calls.paid.length;
+  const segmentationCount = page.calls.segmentation.length;
+  for (const scale of [0.3, 0.55, 3]) {
+    await new Promise((resolve) => storage.local.set({ fontScale: scale }, resolve));
+    await nextTurn();
+    assert.equal(page.api.state.settings.fontScale, scale);
+    assert.deepEqual(viewCues(page), before);
+  }
+  assert.equal(page.calls.paid.length, paidCount);
+  assert.equal(page.calls.segmentation.length, segmentationCount);
+});
+
 test("refresh with partial translations pays only for missing cues, including distant cues", async () => {
   const storage = sharedStorage();
   const translations = new Map();

@@ -161,8 +161,9 @@
               </div>
 
               <label class="field">
-                <span>字幕大小 <strong id="fontScaleValue">1.0x</strong></span>
-                <input id="fontScale" type="range" min="0.7" max="1.8" step="0.1">
+                <span>字幕大小 <strong id="fontScaleValue">1.00x</strong></span>
+                <input id="fontScale" type="range" min="0.3" max="3" step="0.05" aria-describedby="fontScaleHint">
+                <small id="fontScaleHint">范围 0.30～3.00 倍，每次调整 0.05 倍。手机字幕偏大时可先试 0.50～0.65 倍，调整后点击“保存设置”。</small>
               </label>
 
               <label class="toggle">
