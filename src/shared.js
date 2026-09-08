@@ -92,6 +92,67 @@
     return "unknown";
   }
 
+  function isRuntimeConnectionError(message) {
+    return /Receiving end does not exist|Could not establish connection|扩展后台暂时无法连接/i.test(String(message || ""));
+  }
+
+  // Retry only explicit pre-delivery failures. A closed port or a response
+  // timeout does not prove that the background has not already called the API.
+  function sendRuntimeMessage(runtime, message, timeoutMs) {
+    return new Promise((resolve, reject) => {
+      const retryDelays = [250, 750, 1500];
+      let retryIndex = 0;
+      let retryTimer;
+      let settled = false;
+      const deadline = setTimeout(() => {
+        finish(new Error("Translation request timeout: background did not respond."));
+      }, Number(timeoutMs) || 130000);
+
+      function finish(error, response) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(deadline);
+        clearTimeout(retryTimer);
+        if (error) reject(error);
+        else resolve(response);
+      }
+
+      function failed(error) {
+        if (settled) return;
+        const detail = error && error.message ? error.message : String(error);
+        if (/Extension context invalidated|context.*(?:invalid|unloaded)/i.test(detail)) {
+          finish(new Error("扩展已更新或重新加载，请刷新此视频页面后重试。"));
+        } else if (isRuntimeConnectionError(detail)) {
+          if (retryIndex < retryDelays.length) {
+            retryTimer = setTimeout(attempt, retryDelays[retryIndex++]);
+          } else {
+            finish(new Error("扩展后台暂时无法连接，请稍后拖动进度条重试；若仍失败，请刷新页面或重新启用扩展。"));
+          }
+        } else {
+          finish(new Error(detail));
+        }
+      }
+
+      function attempt() {
+        if (settled) return;
+        try {
+          runtime.sendMessage(message, (response) => {
+            // Read lastError even for a late callback to consume API errors.
+            const error = runtime.lastError;
+            if (settled) return;
+            if (error) failed(error);
+            else if (response === undefined) finish(new Error("扩展后台未返回结果，请刷新页面后重试。"));
+            else finish(null, response);
+          });
+        } catch (error) {
+          failed(error);
+        }
+      }
+
+      attempt();
+    });
+  }
+
   const SENTENCE_END_RE = /[.!?。！？]["')\]]?$/;
   const DISPLAY_SENTENCE_END_RE = /[.!?]["')\]]?$/;
   const DISPLAY_BREAK_WORDS = new Set([
@@ -1509,6 +1570,8 @@
     targetLanguageLabel,
     buildTechnicalTerminologyInstruction,
     classifyTranslationError,
+    isRuntimeConnectionError,
+    sendRuntimeMessage,
     parseJson3Captions,
     parseVttCaptions,
     parseVttTime,

@@ -1473,29 +1473,7 @@
   }
 
   function sendMessage(message, timeoutMs) {
-    return new Promise((resolve, reject) => {
-      let settled = false;
-      const requestTimeoutMs = Number(timeoutMs) || TRANSLATION_MESSAGE_TIMEOUT_MS;
-      const timeout = setTimeout(() => {
-        settled = true;
-        reject(new Error(`LLM request timeout: background worker did not respond within ${Math.round(requestTimeoutMs / 1000)} seconds.`));
-      }, requestTimeoutMs);
-
-      chrome.runtime.sendMessage(message, (response) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(timeout);
-
-        const lastError = chrome.runtime.lastError;
-        if (lastError) {
-          reject(new Error(lastError.message));
-        } else {
-          resolve(response);
-        }
-      });
-    });
+    return Core.sendRuntimeMessage(chrome.runtime, message, timeoutMs || TRANSLATION_MESSAGE_TIMEOUT_MS);
   }
 
   function applyTranslations(batch, items) {
@@ -1753,6 +1731,14 @@
   }
 
   function handleSeek() {
+    // A seek is also an explicit opportunity to recover undelivered requests.
+    // Never reset completed/in-flight work or retry API/configuration failures.
+    for (const cue of state.cues) {
+      if (cue.status === "failed" && Core.isRuntimeConnectionError(cue.lastError)) {
+        cue.status = "pending";
+        cue.lastError = "";
+      }
+    }
     scheduleTranslations(getCurrentTimeMs(), true);
   }
 
