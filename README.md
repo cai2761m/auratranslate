@@ -50,6 +50,8 @@ After installation, open AuraTranslate from Firefox's extensions menu, enter you
 
 **0.3.1 touch-drag fix**: touch the subtitle text and move your finger; release to save its position. This version adds a dedicated touch-event path and preserves drag listeners when the player container is replaced. To update an existing 0.3.0 installation, upload 0.3.1 as a new version of the same add-on in the Mozilla Developer Hub and install the resulting signed `.xpi`. Updating the GitHub source alone does not update the installed extension. Automated interaction tests cover this fix; Android device verification is still needed.
 
+**0.3.2 background connection recovery**: in response to reports of `Receiving end does not exist` after seeking on Android, explicit pre-delivery connection failures now get up to three short reconnect attempts. Persistent failures show a recovery hint; seeking again retries undelivered failed cues without resetting translated or in-flight cues. Ambiguous port-closure errors are not automatically replayed by the transport. Automated tests cover reconnects, seeking, and background-script startup, but the reported issue has not yet been reproduced and verified on an Android device. Upload **0.3.2** as a new version of the same Mozilla add-on, install its signed `.xpi` on the phone, and refresh existing YouTube tabs.
+
 Note: a temporary development extension may be removed when Firefox exits; regular users should install a Mozilla-signed package. Google Chrome for Android and the native YouTube app are not supported.
 
 ## Usage

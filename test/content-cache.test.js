@@ -183,7 +183,7 @@ function loadContent(storage, translations, options = {}) {
   source = source.replace(/\n\}\)\(\);\s*$/, `
   globalThis.__cacheTest = {
     state, prepareCaptionCues, handlePlayerResponse, handleDriveTranscript,
-    makeStableTrackFingerprint, resetVideoState, bindStorageChanges
+    makeStableTrackFingerprint, resetVideoState, bindStorageChanges, handleSeek
   };
 })();`);
   vm.runInContext(source, context);
@@ -225,6 +225,31 @@ function viewCues(page) {
     id, startMs, endMs, sourceText, displaySourceText, translatedText, status
   }));
 }
+
+test("seeking recovers only undelivered connection failures and preserves paid results", async () => {
+  const page = loadContent(sharedStorage(), new Map());
+  const cues = [
+    { id: "lost", status: "failed", lastError: "Could not establish connection. Receiving end does not exist." },
+    { id: "lost-localized", status: "failed", lastError: "扩展后台暂时无法连接，请稍后拖动进度条重试。" },
+    { id: "paid", status: "translated", translatedText: "缓存译文" },
+    { id: "busy", status: "translating" },
+    { id: "auth", status: "failed", lastError: "API Key not configured." },
+    { id: "ambiguous", status: "failed", lastError: "The message port closed before a response was received." }
+  ].map((cue, index) => ({ sourceText: `Sentence ${index}.`, startMs: index * 1000, endMs: index * 1000 + 900, ...cue }));
+  page.api.state.cues = cues;
+  page.api.state.video = { currentTime: 50 };
+  page.api.handleSeek();
+  // Repeated seeks while reconnecting must not duplicate the in-flight batch.
+  page.api.handleSeek();
+  await settle(page);
+  assert.deepEqual(page.calls.paid.flatMap((call) => call.cues.map((cue) => cue.id)), ["lost-localized", "lost"]);
+  assert.equal(cues[0].status, "translated");
+  assert.equal(cues[1].status, "translated");
+  assert.equal(cues[2].translatedText, "缓存译文");
+  assert.equal(cues[3].status, "translating");
+  assert.equal(cues[4].status, "failed");
+  assert.equal(cues[5].status, "failed");
+});
 
 test("refresh restores every translated cue without fetching, segmenting, or paid translation", async () => {
   const storage = sharedStorage();

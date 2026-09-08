@@ -857,28 +857,7 @@
   }
 
   function sendMessage(message) {
-    return new Promise((resolve, reject) => {
-      let settled = false;
-      const timeout = setTimeout(() => {
-        settled = true;
-        reject(new Error("Translation request timeout."));
-      }, MESSAGE_TIMEOUT_MS);
-
-      chrome.runtime.sendMessage(message, (response) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(timeout);
-
-        const lastError = chrome.runtime.lastError;
-        if (lastError) {
-          reject(new Error(lastError.message));
-        } else {
-          resolve(response);
-        }
-      });
-    });
+    return Core.sendRuntimeMessage(chrome.runtime, message, MESSAGE_TIMEOUT_MS);
   }
 
   function storageGet(defaults) {
