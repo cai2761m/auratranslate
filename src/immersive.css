@@ -141,6 +141,16 @@ span > .ytbt-immersive-translation::before {
   font-weight: inherit;
 }
 
+.ytbt-immersive-translation.ytbt-immersive-stacked {
+  display: block;
+  width: 100%;
+  margin: 0.3em 0 0.15em;
+}
+
+.ytbt-immersive-translation.ytbt-immersive-stacked::before {
+  content: none;
+}
+
 .ytbt-immersive-translation[data-ytbt-state="loading"] {
   color: #6b7280;
 }

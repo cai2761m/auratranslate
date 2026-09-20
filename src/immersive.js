@@ -115,21 +115,24 @@
     "input",
     "textarea",
     "select",
-    "nav",
-    "aside",
     "footer",
     "form",
-    "[role='navigation']",
     "[role='menu']",
     "[role='menubar']",
     "[role='button']",
     "[role='tab']",
     "[role='tablist']",
     "[contenteditable='true']",
+    "[translate='no']",
     "[aria-hidden='true']",
     "[data-ytbt-immersive-root]",
     "[data-ytbt-immersive-translation]"
   ].join(",");
+  // Documentation callouts and page outlines are readable content, even when
+  // their sites use the same semantic tags as global navigation/sidebar chrome.
+  const TOC_SELECTOR = "#toc, #toc-side, .toc, .table-of-contents, [role='doc-toc'], [aria-label='Table of contents' i]";
+  const CALLOUT_SELECTOR = "aside.alert, aside.admonition, aside.callout, aside[role='note']";
+  const CALLOUT_TITLE_SELECTOR = ".alert-header, .admonition-title, .callout-title";
   const CONTENT_SCOPE_SELECTOR = [
     "article",
     "main",
@@ -582,6 +585,10 @@
     for (const root of collectContentRoots()) {
       collectHeuristicCandidates(root, seen);
     }
+    // Page outlines commonly sit outside main/article.
+    for (const root of document.querySelectorAll(TOC_SELECTOR)) {
+      collectHeuristicCandidates(root, seen);
+    }
 
     return Array.from(seen).sort(compareDocumentOrder);
   }
@@ -623,7 +630,7 @@
     if (!element || element === document.body || element === document.documentElement) {
       return false;
     }
-    if (element.closest(SKIP_SELECTOR)) {
+    if (isExcludedFromTranslation(element)) {
       return false;
     }
     if (isInSiteChromeHeader(element)) {
@@ -659,13 +666,23 @@
   }
 
   function isUsableBlock(element) {
-    if (!element || element.closest(SKIP_SELECTOR)) {
+    if (!element || isExcludedFromTranslation(element)) {
       return false;
     }
     if (element.closest("[data-ytbt-immersive-source]")) {
       return false;
     }
     if (isInSiteChromeHeader(element)) {
+      return false;
+    }
+    // Keep outline translations inside their links, including short entries.
+    if (element.closest(TOC_SELECTOR) && element.querySelector("a[href]")) {
+      return false;
+    }
+    // Put the translation inside the title's text wrapper, not beside the
+    // icon as another flex item (as used by Flutter's alert headers).
+    if (element.matches(CALLOUT_TITLE_SELECTOR) &&
+        element.querySelector("span:not([aria-hidden='true']):not([translate='no'])")) {
       return false;
     }
     if (!isShortTextBlock(element) && (element.querySelector(BLOCK_SELECTOR) || hasReadableDescendantBlock(element))) {
@@ -682,12 +699,32 @@
 
   function isInSiteChromeHeader(element) {
     const header = element.closest("header");
-    return Boolean(header && !header.closest(CONTENT_SCOPE_SELECTOR));
+    return Boolean(header && !header.closest(CONTENT_SCOPE_SELECTOR) && !header.closest(TOC_SELECTOR));
+  }
+
+  function isExcludedFromTranslation(element) {
+    if (element.closest(SKIP_SELECTOR)) {
+      return true;
+    }
+    const toc = element.closest(TOC_SELECTOR);
+    for (let ancestor = element; ancestor; ancestor = ancestor.parentElement) {
+      if (!ancestor.matches("nav, aside, [role='navigation']")) {
+        continue;
+      }
+      if (toc && (ancestor.contains(toc) || toc.contains(ancestor))) {
+        continue;
+      }
+      if (ancestor.matches(CALLOUT_SELECTOR) && ancestor.closest(CONTENT_SCOPE_SELECTOR)) {
+        continue;
+      }
+      return true;
+    }
+    return false;
   }
 
   function hasReadableDescendantBlock(element) {
     for (const descendant of element.querySelectorAll(READABLE_DESCENDANT_SELECTOR)) {
-      if (descendant === element || descendant.closest(SKIP_SELECTOR)) {
+      if (descendant === element || isExcludedFromTranslation(descendant)) {
         continue;
       }
       if (!isVisible(descendant)) {
@@ -713,7 +750,7 @@
 
   function extractReadableText(element) {
     const clone = element.cloneNode(true);
-    for (const injected of clone.querySelectorAll("[data-ytbt-immersive-translation]")) {
+    for (const injected of clone.querySelectorAll("[data-ytbt-immersive-translation], [aria-hidden='true']")) {
       injected.remove();
     }
 
@@ -751,6 +788,8 @@
     return Boolean(
       element &&
         (element.matches(SHORT_TEXT_SELECTOR) ||
+          (element.closest(TOC_SELECTOR) && element.matches("a[href], header, header span")) ||
+          (element.closest(CALLOUT_SELECTOR) && element.closest(CALLOUT_TITLE_SELECTOR)) ||
           (element.closest(CONTENT_SCOPE_SELECTOR) && element.matches(SHORT_TEXT_CLASS_SELECTOR)))
     );
   }
@@ -773,6 +812,10 @@
 
     const container = document.createElement("span");
     container.className = "ytbt-immersive-translation";
+    if ((block.element.closest(TOC_SELECTOR) && block.element.matches("a[href]")) ||
+        (block.element.closest(CALLOUT_SELECTOR) && block.element.closest(CALLOUT_TITLE_SELECTOR))) {
+      container.classList.add("ytbt-immersive-stacked");
+    }
     container.dataset.ytbtImmersiveTranslation = "true";
     container.dataset.ytbtImmersiveFor = block.id;
     container.dataset.ytbtState = "loading";

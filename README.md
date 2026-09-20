@@ -58,6 +58,8 @@ Note: a temporary development extension may be removed when Firefox exits; regul
 
 ## Usage
 
+**0.3.4 webpage coverage fix**: Immersive translation now includes article callouts, their short titles, and page outlines (including the Flutter docs sidebar), while excluding decorative icon text. For an unpacked installation, reload the extension, refresh the webpage, and click translate. Signed installations require an updated extension package.
+
 ### YouTube Subtitles
 
 1. Open a YouTube video that has English captions.
