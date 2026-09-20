@@ -7,7 +7,7 @@ const { JSDOM } = require("jsdom");
 const sharedScript = fs.readFileSync(path.join(__dirname, "../src/shared.js"), "utf8");
 const immersiveScript = fs.readFileSync(path.join(__dirname, "../src/immersive.js"), "utf8");
 
-async function translatePage(t, html) {
+async function translatePage(t, html, options = {}) {
   const dom = new JSDOM(html, { url: "https://docs.flutter.dev/install/quick", runScripts: "outside-only" });
   t.after(() => dom.window.close());
   const { window } = dom;
@@ -16,7 +16,7 @@ async function translatePage(t, html) {
   // selectors, ancestry, text extraction, rendering, and the public click path.
   window.HTMLElement.prototype.getBoundingClientRect = function () {
     const hidden = this.closest("[hidden], [style*='display: none']");
-    return { width: hidden ? 0 : 400, height: hidden ? 0 : 30 };
+    return { width: hidden ? 0 : 400, height: hidden ? 0 : 30, top: 0, bottom: 30, ...options.rect?.(this) };
   };
   const getComputedStyle = window.getComputedStyle.bind(window);
   window.getComputedStyle = (element) => {
@@ -32,17 +32,20 @@ async function translatePage(t, html) {
     ...window.YTBTCore,
     async sendRuntimeMessage(_runtime, message) {
       requests.push(message);
+      if (options.sendMessage) return options.sendMessage(message);
+      if (message.cacheOnly) return { ok: true, items: [] };
       return { ok: true, items: message.items.map((item) => ({ id: item.id, translatedText: `译文：${item.sourceText}` })) };
     }
   };
   window.eval(immersiveScript);
   window.document.querySelector(".ytbt-immersive-tab").click();
+  await options.afterStart?.({ window, requests });
   for (let turn = 0; turn < 50; turn += 1) {
     await new Promise((resolve) => setImmediate(resolve));
     if (window.document.querySelector(".ytbt-immersive-tab").dataset.ytbtState !== "translating") break;
   }
-  assert.equal(window.document.querySelector(".ytbt-immersive-tab").dataset.ytbtState, "done");
-  return { document: window.document, requests, texts: requests.flatMap((request) => request.items.map((item) => item.sourceText)) };
+  assert.equal(window.document.querySelector(".ytbt-immersive-tab").dataset.ytbtState, options.expectedState || "done");
+  return { document: window.document, requests, texts: requests.filter((request) => !request.cacheOnly).flatMap((request) => request.items.map((item) => item.sourceText)) };
 }
 
 test("Flutter callout titles and list items translate once without icon ligatures", async (t) => {
@@ -128,4 +131,144 @@ test("semantic outlines and admonitions support nested lists without duplicate b
     </article>`);
   assert.deepEqual(texts, ["Setup", "Run", "Tip", "Read this useful tip before proceeding.", "Reminder", "Save your work before closing the editor."]);
   assert.equal(document.querySelectorAll("nav a > [data-ytbt-state='done']").length, 2);
+});
+
+async function waitUntil(predicate) {
+  for (let turn = 0; turn < 100; turn += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.fail("Expected async progress did not occur");
+}
+
+function translatedResponse(message) {
+  return { ok: true, items: message.items.map((item) => ({ id: item.id, translatedText: `译文：${item.sourceText}` })) };
+}
+
+function paragraphs(count) {
+  return `<main>${Array.from({ length: count }, (_, index) =>
+    `<p data-index="${index}">This is readable paragraph number ${index}.</p>`).join("")}</main>`;
+}
+
+test("page scheduler prioritizes viewport, reorders after scrolling and renders out of order with at most three requests", async (t) => {
+  let focusedIndex = 24;
+  let active = 0;
+  let peak = 0;
+  const gates = [];
+  const { document, requests } = await translatePage(t, paragraphs(40), {
+    rect(element) {
+      const index = Number(element.dataset.index);
+      const top = Number.isFinite(index) ? (index - focusedIndex) * 200 + 10 : 0;
+      return { top, bottom: top + 30 };
+    },
+    sendMessage(message) {
+      if (message.cacheOnly) return { ok: true, items: [] };
+      active += 1;
+      peak = Math.max(peak, active);
+      return new Promise((resolve) => gates.push({ message, release() {
+        active -= 1;
+        resolve(translatedResponse(message));
+      } }));
+    },
+    async afterStart({ window }) {
+      await waitUntil(() => gates.length === 3);
+      assert.deepEqual(Array.from(gates[0].message.items, (item) => item.id), ["im24", "im25", "im26", "im27"]);
+      assert.equal(active, 3, "three batches must start before any response");
+      const firstId = gates[0].message.items[0].id;
+      const secondId = gates[1].message.items[0].id;
+      focusedIndex = 39;
+      gates[1].release();
+      await waitUntil(() => gates.length === 4);
+      assert.equal(gates[3].message.items[0].id, "im39", "newly visible paragraph goes next");
+      assert.equal(window.document.querySelector(`[data-ytbt-immersive-for='${firstId}']`).dataset.ytbtState, "loading");
+      assert.equal(window.document.querySelector(`[data-ytbt-immersive-for='${secondId}']`).dataset.ytbtState, "done");
+      gates[0].release();
+      gates[2].release();
+      let released = 3;
+      await waitUntil(() => {
+        while (released < gates.length) gates[released++].release();
+        return window.document.querySelector(".ytbt-immersive-tab").dataset.ytbtState === "done";
+      });
+    }
+  });
+  assert.equal(peak, 3);
+  const sent = requests.filter((request) => !request.cacheOnly).flatMap((request) => Array.from(request.items, (item) => item.id));
+  assert.equal(sent.length, 40);
+  assert.equal(new Set(sent).size, 40);
+  assert.equal(document.querySelectorAll("[data-ytbt-state='done'][data-ytbt-immersive-translation]").length, 40);
+});
+
+test("cached paragraphs appear before paid responses and are never scheduled again", async (t) => {
+  let release;
+  const { requests, document } = await translatePage(t, paragraphs(6), {
+    sendMessage(message) {
+      if (message.cacheOnly) return translatedResponse({ items: message.items.slice(0, 2) });
+      return new Promise((resolve) => { release = () => resolve(translatedResponse(message)); });
+    },
+    async afterStart({ window }) {
+      await waitUntil(() => release);
+      assert.equal(window.document.querySelectorAll("[data-ytbt-immersive-translation][data-ytbt-state='done']").length, 2);
+      release();
+    }
+  });
+  assert.equal(requests.length, 2);
+  assert.deepEqual(Array.from(requests[1].items, (item) => item.id), ["im2", "im3", "im4", "im5"]);
+  assert.equal(document.querySelectorAll("[data-ytbt-immersive-translation][data-ytbt-state='done']").length, 6);
+});
+
+test("full cache hit and cache-read failure never issue paid page messages", async (t) => {
+  const hit = await translatePage(t, paragraphs(8), { sendMessage: (message) => translatedResponse(message) });
+  assert.equal(hit.requests.length, 1);
+  assert.equal(hit.requests[0].cacheOnly, true);
+  const failed = await translatePage(t, paragraphs(8), {
+    expectedState: "error",
+    sendMessage: () => ({ ok: false, errors: [{ message: "Unable to read cache" }] })
+  });
+  assert.equal(failed.requests.length, 1);
+  assert.match(failed.document.querySelector(".ytbt-immersive-panel").textContent, /Unable to read cache/);
+});
+
+test("a failed concurrent batch stops new work while late successes survive and retry hydrates them", async (t) => {
+  const gates = [];
+  const cached = new Map();
+  let retrying = false;
+  const { document, requests } = await translatePage(t, paragraphs(32), {
+    sendMessage(message) {
+      if (message.cacheOnly) return { ok: true, items: message.items.filter((item) => cached.has(item.id)).map((item) => cached.get(item.id)) };
+      if (retrying) return translatedResponse(message);
+      return new Promise((resolve) => gates.push({ message, resolve }));
+    },
+    async afterStart({ window, requests }) {
+      await waitUntil(() => gates.length === 3);
+      gates[0].resolve({ ok: false, errors: [{ message: "Provider unavailable" }] });
+      await new Promise((resolve) => setImmediate(resolve));
+      for (const gate of gates.slice(1)) {
+        const response = translatedResponse(gate.message);
+        response.items.forEach((item) => cached.set(item.id, item));
+        gate.resolve(response);
+      }
+      await waitUntil(() => window.document.querySelector(".ytbt-immersive-tab").dataset.ytbtState === "error");
+      assert.equal(gates.length, 3, "unsent work must stop after failure");
+      assert.equal(window.document.querySelectorAll("[data-ytbt-immersive-translation][data-ytbt-state='done']").length, 16);
+      assert.equal(window.document.querySelectorAll("[data-ytbt-immersive-translation][data-ytbt-state='loading']").length, 0);
+      retrying = true;
+      const beforeRetry = requests.length;
+      window.document.querySelector(".ytbt-immersive-tab").click();
+      await waitUntil(() => window.document.querySelector(".ytbt-immersive-tab").dataset.ytbtState === "done");
+      const resent = requests.slice(beforeRetry).filter((request) => !request.cacheOnly).flatMap((request) => Array.from(request.items));
+      assert.equal(resent.length, 16);
+      assert.ok(resent.every((item) => !cached.has(item.id)));
+    }
+  });
+  assert.equal(requests.filter((request) => request.cacheOnly).length, 2);
+  assert.equal(document.querySelectorAll("[data-ytbt-immersive-translation][data-ytbt-state='done']").length, 32);
+});
+
+test("long paragraphs remain within per-request character limits", async (t) => {
+  const text = "This sentence is sufficiently long to exercise batching. ".repeat(50);
+  const { requests } = await translatePage(t, `<main>${Array.from({ length: 8 }, () => `<p>${text}</p>`).join("")}</main>`);
+  for (const request of requests.filter((request) => !request.cacheOnly)) {
+    assert.ok(request.items.length <= 8);
+    assert.ok(request.items.reduce((total, item) => total + item.sourceText.length, 0) <= 7000);
+  }
 });

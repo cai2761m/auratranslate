@@ -58,6 +58,8 @@ Note: a temporary development extension may be removed when Firefox exits; regul
 
 ## Usage
 
+**0.3.5 webpage translation speed**: Content near the current viewport goes first, with up to 4 blocks in the first batch, then up to 8 per batch and 3 concurrent batches. Pending work is reprioritized as you scroll. Cached paragraphs render before any provider calls; only missing text is requested, with duplicate text and in-flight requests shared on the same page. The cache survives refreshes and background restarts and is scoped to the source text, page, model, endpoint, languages and cache version. It shares the subtitle cache item budget, retains up to 240 paragraphs per page, and is removed by the existing Clear Translation Cache action. Clicking translate after a failure reuses saved successes. Speed depends on provider latency and rate limits. Reload the extension and refresh the page after updating.
+
 **0.3.4 webpage coverage fix**: Immersive translation now includes article callouts, their short titles, and page outlines (including the Flutter docs sidebar), while excluding decorative icon text. For an unpacked installation, reload the extension, refresh the webpage, and click translate. Signed installations require an updated extension package.
 
 ### YouTube Subtitles

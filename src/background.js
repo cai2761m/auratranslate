@@ -444,28 +444,10 @@ async function handleImmersiveTranslate(message) {
   const sourceLanguage = settings.sourceLanguage || Core.DEFAULT_SETTINGS.sourceLanguage;
   const translationConfig = Core.resolveTranslationConfig(settings, "immersive");
 
-  if (!translationConfig.apiKey) {
-    return {
-      type: "IMMERSIVE_TRANSLATE_RESULT",
-      ok: false,
-      items: [],
-      errors: [{ code: "missing_api_key", message: `${translationConfig.providerLabel} API Key is not configured.` }]
-    };
-  }
-
   const endpointUrl =
     translationConfig.apiStyle === "gemini"
       ? translationConfig.generateContentUrl
       : translationConfig.chatCompletionsUrl;
-  if (!endpointUrl || !translationConfig.model) {
-    return {
-      type: "IMMERSIVE_TRANSLATE_RESULT",
-      ok: false,
-      items: [],
-      errors: [{ code: "missing_provider_config", message: `${translationConfig.providerLabel} base URL or model is not configured.` }]
-    };
-  }
-
   const cues = (Array.isArray(message.items) ? message.items : [])
     .map((item) => ({
       id: item && item.id != null ? String(item.id) : "",
@@ -482,21 +464,73 @@ async function handleImmersiveTranslate(message) {
     };
   }
 
-  const translatedItems = await translateWithRetry({
-    translationConfig,
-    targetLanguage,
-    sourceLanguage,
-    asrCorrectionEnabled: false,
-    cues,
-    mode: "immersive"
-  });
+  // Stable text IDs survive DOM reordering, changed batch boundaries and
+  // repeated headings in the page outline. Do not include credentials or the
+  // URL fragment; keep different pages and translation profiles isolated.
+  const cacheKey = `ytbt:immersive:${await immersiveFingerprint(JSON.stringify([
+    String(message.pageUrl || "").split("#")[0],
+    translationConfig.provider, endpointUrl, translationConfig.model,
+    sourceLanguage, targetLanguage, settings.cacheVersion || "1", "immersive-v1"
+  ]))}`;
+  const identities = await Promise.all(cues.map(async (cue) => ({
+    ...cue, cacheId: await immersiveFingerprint(cue.sourceText)
+  })));
+  const uniqueCues = new Map(identities.map((cue) => [cue.cacheId, { id: cue.cacheId, sourceText: cue.sourceText }]));
+  const cache = await storageGet({ [cacheKey]: { items: {} } });
+  const storedItems = cache[cacheKey] && cache[cacheKey].items || {};
+  const results = new Map();
+  const missing = [];
+  for (const cue of uniqueCues.values()) {
+    const stored = storedItems[cue.id];
+    if (stored && stored.sourceText === cue.sourceText && typeof stored.translatedText === "string" && stored.translatedText.trim()) {
+      results.set(cue.id, { translatedText: stored.translatedText, cached: true });
+    } else {
+      missing.push(cue);
+    }
+  }
+
+  if (message.cacheOnly !== true && missing.length) {
+    if (!translationConfig.apiKey || !endpointUrl || !translationConfig.model) {
+      throw new Error(`${translationConfig.providerLabel} ${!translationConfig.apiKey ? "API Key" : "base URL or model"} is not configured.`);
+    }
+    const translatedItems = await translateMissingCues({
+      cacheKey, translationConfig, targetLanguage, sourceLanguage,
+      asrCorrectionEnabled: false,
+      cues: missing,
+      mode: "immersive",
+      async persistItems(items) {
+        const newItems = {};
+        for (const item of items) {
+          const cue = uniqueCues.get(String(item.id));
+          if (cue && item.translatedText) {
+            newItems[cue.id] = { sourceText: cue.sourceText, translatedText: item.translatedText };
+          }
+        }
+        const maxItems = Number(settings.translationCacheMaxItems) || Core.DEFAULT_CACHE_MAX_ITEMS;
+        await persistTranslationCache({
+          cacheKey,
+          cacheValue: { items: newItems, updatedAt: Date.now() },
+          maxItems,
+          maxItemsPerKey: Math.max(1, Math.min(240, maxItems))
+        });
+      }
+    });
+    for (const item of translatedItems) results.set(String(item.id), item);
+  }
 
   return {
     type: "IMMERSIVE_TRANSLATE_RESULT",
     ok: true,
-    items: translatedItems,
+    items: identities.filter((cue) => results.has(cue.cacheId)).map((cue) => ({
+      ...results.get(cue.cacheId), id: cue.id
+    })),
     errors: []
   };
+}
+
+async function immersiveFingerprint(value) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function inFlightCueKey(cacheKey, cueId, sourceText) {
@@ -680,8 +714,13 @@ async function translateBatch({
           terminologyInstruction +
           "Keep meaning concise for on-screen reading. `translatedText` must translate the polished meaning. " +
           outputInstruction;
+  // Content hashes belong in local cache identities, not in model output:
+  // short wire IDs avoid spending generation time/tokens copying SHA-256 IDs.
+  const wireCues = mode === "immersive"
+    ? cues.map((cue, index) => ({ ...cue, id: String(index) }))
+    : cues;
   const userPayload = {
-    items: cues.map((cue) => ({ id: String(cue.id), text: cue.sourceText }))
+    items: wireCues.map((cue) => ({ id: String(cue.id), text: cue.sourceText }))
   };
 
   let content = "";
@@ -810,14 +849,16 @@ async function translateBatch({
   }
 
   const items = Core.parseDeepSeekTranslationContent(content);
-  const expectedIds = new Set(cues.map((cue) => String(cue.id)));
+  const expectedIds = new Set(wireCues.map((cue) => String(cue.id)));
   const filtered = items.filter((item) => expectedIds.has(String(item.id)));
 
   if (!filtered.length) {
     throw new Error(`${translationConfig.providerLabel} response did not contain usable translations.`);
   }
 
-  return filtered;
+  return mode === "immersive"
+    ? filtered.map((item) => ({ ...item, id: String(cues[Number(item.id)].id) }))
+    : filtered;
 }
 
 function withApiKeyQuery(url, apiKey) {
@@ -892,14 +933,20 @@ function persistTranslationCache(request) {
   return write;
 }
 
-async function writeTranslationCache({ cacheKey, cacheValue, maxItems }) {
+async function writeTranslationCache({ cacheKey, cacheValue, maxItems, maxItemsPerKey }) {
   const latest = await storageGet({ [cacheKey]: { items: {}, updatedAt: 0 } });
   const latestValue = latest[cacheKey] || { items: {}, updatedAt: 0 };
   const latestItems = latestValue.items && typeof latestValue.items === "object" ? latestValue.items : {};
   const incomingItems = cacheValue.items && typeof cacheValue.items === "object" ? cacheValue.items : {};
-  const actualAddedCount = Object.keys(incomingItems).filter((key) => !latestItems[key]).length;
+  let mergedItems = Object.assign({}, latestItems, incomingItems);
+  if (maxItemsPerKey) {
+    mergedItems = Object.fromEntries(Object.entries(latestItems)
+      .filter(([key]) => !Object.hasOwn(incomingItems, key))
+      .concat(Object.entries(incomingItems)).slice(-maxItemsPerKey));
+  }
+  const actualAddedCount = Object.keys(mergedItems).length - Object.keys(latestItems).length;
   cacheValue = Object.assign({}, latestValue, cacheValue, {
-    items: Object.assign({}, latestItems, incomingItems),
+    items: mergedItems,
     updatedAt: Date.now()
   });
   // Lazily initialize the in-memory count once per service-worker lifetime.

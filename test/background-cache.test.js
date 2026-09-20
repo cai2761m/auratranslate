@@ -24,6 +24,7 @@ function createFixture(settings = {}) {
       ...settings
     },
     fetchCount: 0,
+    inputs: [],
     hooks: {}
   };
   fixture.startWorker = () => {
@@ -72,6 +73,8 @@ function createFixture(settings = {}) {
     };
     const context = vm.createContext({
       AbortController,
+      crypto: require("node:crypto").webcrypto,
+      TextEncoder,
       chrome,
       console,
       setTimeout,
@@ -82,6 +85,8 @@ function createFixture(settings = {}) {
         fixture.fetchCount += 1;
         const payload = JSON.parse(options.body);
         const input = JSON.parse(payload.messages[1].content);
+        fixture.inputs.push(input.items);
+        if (fixture.hooks.beforeFetch) await fixture.hooks.beforeFetch(input);
         const content = payload.messages[0].content.includes("sentence-boundary engine")
           ? { groups: input.items.map((item) => ({ startId: item.id, endId: item.id })) }
           : {
@@ -131,6 +136,132 @@ function translationMessage(ids, extra = {}) {
 function translationCaches(fixture) {
   return Object.entries(fixture.storage).filter(([key, value]) => key.startsWith("ytbt:") && value.items);
 }
+
+function immersiveMessage(texts, extra = {}) {
+  return {
+    type: "IMMERSIVE_TRANSLATE",
+    pageUrl: "https://docs.example.com/guide#intro",
+    items: texts.map((sourceText, index) => ({ id: `im${index}`, sourceText })),
+    ...extra
+  };
+}
+
+test("immersive cache survives refresh, worker restart, reordering and duplicate headings", async () => {
+  const fixture = createFixture();
+  const first = await fixture.startWorker().request(immersiveMessage(["Introduction", "Install the editor", "Introduction"]));
+  assert.equal(first.items.length, 3);
+  assert.equal(fixture.inputs[0].length, 2, "duplicate source text should be billed only once");
+  assert.deepEqual(fixture.inputs[0].map((item) => item.id), ["0", "1"], "model gets short IDs");
+  const restarted = fixture.startWorker();
+  const hit = await restarted.request(immersiveMessage(["Install the editor", "Introduction"], {
+    pageUrl: "https://docs.example.com/guide#other", cacheOnly: true
+  }));
+  assert.equal(hit.ok, true);
+  assert.deepEqual(Array.from(hit.items, (item) => [item.id, item.translatedText]), [
+    ["im0", "Translated: Install the editor"], ["im1", "Translated: Introduction"]
+  ]);
+  assert.ok(hit.items.every((item) => item.cached));
+  assert.equal(fixture.fetchCount, 1);
+});
+
+test("immersive partial hydration never calls provider and only missing text is translated", async () => {
+  const fixture = createFixture();
+  await fixture.startWorker().request(immersiveMessage(["Existing paragraph"]));
+  fixture.storage.translationApiKey = "";
+  const worker = fixture.startWorker();
+  const message = immersiveMessage(["Existing paragraph", "New paragraph"]);
+  const cached = await worker.request({ ...message, cacheOnly: true });
+  assert.equal(cached.ok, true);
+  assert.equal(cached.items.length, 1);
+  assert.equal((await worker.request(immersiveMessage(["Existing paragraph"]))).ok, true);
+  assert.equal(fixture.fetchCount, 1);
+  fixture.storage.translationApiKey = "rotated-key";
+  const translated = await worker.request(message);
+  assert.equal(translated.items.length, 2);
+  assert.equal(fixture.fetchCount, 2);
+  assert.deepEqual(fixture.inputs[1].map((item) => item.text), ["New paragraph"]);
+});
+
+test("immersive parallel writes merge without losing paragraphs", async () => {
+  const fixture = createFixture();
+  const worker = fixture.startWorker();
+  const texts = Array.from({ length: 24 }, (_, index) => `Paragraph ${index}`);
+  const responses = await Promise.all([0, 8, 16].map((start) => worker.request(immersiveMessage(texts.slice(start, start + 8)))));
+  assert.ok(responses.every((response) => response.ok));
+  const hit = await fixture.startWorker().request(immersiveMessage(texts, { cacheOnly: true }));
+  assert.equal(hit.items.length, 24);
+  assert.equal(fixture.fetchCount, 3);
+});
+
+test("immersive refresh shares in-flight paid work through persistence with different DOM IDs", async () => {
+  const fixture = createFixture();
+  const worker = fixture.startWorker();
+  const writeStarted = deferred();
+  const releaseWrite = deferred();
+  fixture.hooks.beforeSet = (commit) => {
+    writeStarted.resolve();
+    releaseWrite.promise.then(commit);
+  };
+  const first = worker.request(immersiveMessage(["Shared paragraph"]));
+  await writeStarted.promise;
+  const second = worker.request(immersiveMessage([], { items: [{ id: "im99", sourceText: "Shared paragraph" }] }));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  releaseWrite.resolve();
+  assert.equal((await first).ok, true);
+  assert.equal((await second).items[0].id, "im99");
+  assert.equal(fixture.fetchCount, 1);
+});
+
+test("immersive cache isolates changed text, page, model, languages, endpoint and cache version", async (t) => {
+  for (const change of [
+    { text: "Changed paragraph" }, { pageUrl: "https://docs.example.com/other" },
+    { translationModel: "new-model" }, { targetLanguage: "ja" }, { sourceLanguage: "fr" },
+    { translationBaseUrl: "https://different.example.com/v1" }, { cacheVersion: "2" },
+    { immersiveTranslationProvider: "custom", immersiveTranslationBaseUrl: "https://dedicated.example.com/v1", immersiveTranslationModel: "dedicated-model" }
+  ]) {
+    await t.test(JSON.stringify(change), async () => {
+      const fixture = createFixture();
+      await fixture.startWorker().request(immersiveMessage(["Original paragraph"]));
+      Object.assign(fixture.storage, change);
+      const message = immersiveMessage([change.text || "Original paragraph"], { cacheOnly: true });
+      if (change.pageUrl) message.pageUrl = change.pageUrl;
+      const response = await fixture.startWorker().request(message);
+      assert.equal(response.ok, true);
+      assert.equal(response.items.length, 0);
+      assert.equal(fixture.fetchCount, 1);
+    });
+  }
+});
+
+test("immersive storage failures do not silently repay for a completed translation", async () => {
+  const fixture = createFixture();
+  const worker = fixture.startWorker();
+  fixture.hooks.getError = "Storage unavailable";
+  assert.equal((await worker.request(immersiveMessage(["Paragraph"]))).ok, false);
+  assert.equal(fixture.fetchCount, 0);
+  delete fixture.hooks.getError;
+  fixture.hooks.setError = "QUOTA_BYTES quota exceeded";
+  assert.equal((await worker.request(immersiveMessage(["Paragraph"]))).ok, false);
+  assert.equal(fixture.fetchCount, 1);
+  delete fixture.hooks.setError;
+  assert.equal((await worker.request(immersiveMessage(["Paragraph"]))).ok, true);
+  assert.equal(fixture.fetchCount, 1);
+  const restored = await fixture.startWorker().request(immersiveMessage(["Paragraph"], { cacheOnly: true }));
+  assert.equal(restored.items.length, 1);
+});
+
+test("immersive cache validates stored source and bounds changing page history", async () => {
+  const fixture = createFixture({ translationCacheMaxItems: 3 });
+  const worker = fixture.startWorker();
+  await worker.request(immersiveMessage(["One", "Two", "Three"]));
+  const cache = translationCaches(fixture)[0][1];
+  Object.values(cache.items)[0].sourceText = "Corrupted source";
+  assert.equal((await fixture.startWorker().request(immersiveMessage(["One"], { cacheOnly: true }))).items.length, 0);
+  await worker.request(immersiveMessage(["Four", "Five"]));
+  assert.equal(Object.keys(translationCaches(fixture)[0][1].items).length, 3);
+  const cached = await fixture.startWorker().request(immersiveMessage(["Three", "Four", "Five"], { cacheOnly: true }));
+  assert.equal(cached.items.length, 3);
+});
 
 test("parallel subtitle batches all survive refresh and service-worker restart", async () => {
   const fixture = createFixture();

@@ -233,6 +233,8 @@
   const MIN_TEXT_LENGTH = 24;
   const MAX_TEXT_LENGTH = 4000;
   const BATCH_SIZE = 8;
+  const FIRST_BATCH_SIZE = 4;
+  const MAX_CONCURRENT_BATCHES = 3;
   const BATCH_CHAR_LIMIT = 7000;
   const MESSAGE_TIMEOUT_MS = 180000;
   const DEFAULT_BALL_TOP_PCT = 50;
@@ -508,32 +510,51 @@
 
     let translatedCount = 0;
     try {
-      const batches = makeBatches(blocks);
-      for (const batch of batches) {
-        if (token !== state.runToken) {
-          return;
-        }
-
-        const items = await translateBatch(batch);
-        const translatedById = new Map();
-        for (const item of items) {
-          if (item && item.id != null && item.translatedText) {
-            translatedById.set(String(item.id), Core.normalizeSubtitleText(item.translatedText));
-          }
-        }
-
+      const applyItems = (batch, items) => {
+        const translatedById = new Map(items.filter((item) => item && item.translatedText)
+          .map((item) => [String(item.id), Core.normalizeSubtitleText(item.translatedText)]));
+        const missing = [];
         for (const block of batch) {
           const translatedText = translatedById.get(block.id);
           if (translatedText) {
             renderTranslation(block, translatedText);
+            translatedCount += 1;
           } else {
-            renderTranslationError(block, "Translation missing for this block.");
+            missing.push(block);
           }
-          translatedCount += 1;
         }
-
         showStatus(`Translating ${translatedCount}/${blocks.length} blocks...`, true);
-      }
+        return missing;
+      };
+
+      // Hydrate the whole page first so cached paragraphs never wait behind a
+      // slow provider request. A cache read failure must not trigger paid work.
+      const cachedItems = await translateBatch(blocks, true);
+      if (token !== state.runToken) return;
+      const pending = applyItems(blocks, cachedItems);
+      let firstBatch = true;
+      let failure = null;
+      const worker = async () => {
+        while (pending.length && !failure && token === state.runToken) {
+          // Re-evaluate when a slot opens: scrolling changes what matters next.
+          pending.sort((left, right) => viewportDistance(left) - viewportDistance(right));
+          const batch = takeNextBatch(pending, firstBatch ? FIRST_BATCH_SIZE : BATCH_SIZE);
+          firstBatch = false;
+          try {
+            const items = await translateBatch(batch);
+            if (token !== state.runToken) return;
+            const missing = applyItems(batch, items);
+            if (missing.length) throw new Error("Translation missing for some blocks. Click to retry.");
+          } catch (error) {
+            // Stop scheduling after an error, but let already-sent requests
+            // finish and render so a late success cannot overwrite error state.
+            failure = failure || error;
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: MAX_CONCURRENT_BATCHES }, () => worker()));
+      if (token !== state.runToken) return;
+      if (failure) throw failure;
 
       state.translated = true;
       updateBallMode("done");
@@ -854,37 +875,31 @@
     container.dataset.ytbtState = "error";
   }
 
-  function makeBatches(blocks) {
-    const batches = [];
-    let current = [];
-    let currentChars = 0;
-
-    for (const block of blocks) {
-      const textLength = block.sourceText.length;
-      const wouldOverflow =
-        current.length >= BATCH_SIZE ||
-        (current.length > 0 && currentChars + textLength > BATCH_CHAR_LIMIT);
-      if (wouldOverflow) {
-        batches.push(current);
-        current = [];
-        currentChars = 0;
-      }
-
-      current.push(block);
-      currentChars += textLength;
-    }
-
-    if (current.length) {
-      batches.push(current);
-    }
-
-    return batches;
+  function viewportDistance(block) {
+    const rect = block.element.getBoundingClientRect();
+    if (rect.bottom < 0) return -rect.bottom;
+    if (rect.top > window.innerHeight) return rect.top - window.innerHeight;
+    return 0;
   }
 
-  async function translateBatch(batch) {
+  function takeNextBatch(pending, maxSize) {
+    const batch = [];
+    let currentChars = 0;
+    while (pending.length && batch.length < maxSize) {
+      const block = pending[0];
+      const textLength = block.sourceText.length;
+      if (batch.length && currentChars + textLength > BATCH_CHAR_LIMIT) break;
+      batch.push(pending.shift());
+      currentChars += textLength;
+    }
+    return batch;
+  }
+
+  async function translateBatch(batch, cacheOnly = false) {
     const response = await sendMessage({
       type: "IMMERSIVE_TRANSLATE",
       pageUrl: location.href,
+      cacheOnly,
       items: batch.map((block) => ({
         id: block.id,
         sourceText: block.sourceText
