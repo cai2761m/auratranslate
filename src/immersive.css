@@ -151,7 +151,8 @@ span > .ytbt-immersive-translation::before {
   content: none;
 }
 
-.ytbt-immersive-translation[data-ytbt-state="loading"] {
+.ytbt-immersive-translation[data-ytbt-state="loading"],
+.ytbt-immersive-translation[data-ytbt-state="waiting"] {
   color: #6b7280;
 }
 
@@ -159,6 +160,7 @@ span > .ytbt-immersive-translation::before {
   color: #b91c1c;
 }
 
+.ytbt-immersive-translation[hidden],
 html.ytbt-immersive-hidden .ytbt-immersive-translation {
   display: none !important;
 }

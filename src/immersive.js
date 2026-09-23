@@ -236,7 +236,9 @@
   const FIRST_BATCH_SIZE = 4;
   const MAX_CONCURRENT_BATCHES = 3;
   const BATCH_CHAR_LIMIT = 7000;
-  const MESSAGE_TIMEOUT_MS = 180000;
+  // Three 60s provider attempts plus up to 45s of retry backoff and persistence.
+  const MESSAGE_TIMEOUT_MS = 240000;
+  const CACHE_MESSAGE_TIMEOUT_MS = 15000;
   const DEFAULT_BALL_TOP_PCT = 50;
   const BALL_EDGE_PADDING_PX = 8;
   const BALL_DRAG_THRESHOLD_PX = 4;
@@ -250,6 +252,9 @@
     visible: true,
     translated: false,
     runToken: 0,
+    pageUrl: pageIdentity(),
+    recovery: null,
+    recovering: false,
     ballTopPct: DEFAULT_BALL_TOP_PCT,
     ballDrag: {
       pointerId: null,
@@ -269,6 +274,18 @@
       return;
     }
     root.dataset.ytbtImmersiveReady = "true";
+    document.addEventListener("visibilitychange", () => {
+      syncPageIdentity();
+      if (!document.hidden) recoverCachedTranslations();
+    });
+    window.addEventListener("pageshow", () => {
+      syncPageIdentity();
+      recoverCachedTranslations();
+    });
+    window.addEventListener("popstate", syncPageIdentity);
+    // SPA navigation need not dispatch popstate. Never attribute old text to
+    // a new URL or let an old response change the new page's controls.
+    setInterval(syncPageIdentity, 1000);
 
     if (document.body) {
       mountControls();
@@ -319,6 +336,7 @@
   async function handleBallClick(event) {
     event.preventDefault();
     event.stopPropagation();
+    syncPageIdentity();
 
     if (state.ballDrag.suppressClick) {
       state.ballDrag.suppressClick = false;
@@ -488,7 +506,86 @@
     return Number.isFinite(number) ? clamp(number, 4, 96) : DEFAULT_BALL_TOP_PCT;
   }
 
+  function pageIdentity() {
+    const url = new URL(location.href);
+    url.hash = "";
+    return url.href;
+  }
+
+  function syncPageIdentity() {
+    const url = pageIdentity();
+    if (state.pageUrl === url) return;
+    state.pageUrl = url;
+    state.runToken += 1;
+    state.recovery = null;
+    state.translated = false;
+    clearExistingTranslations();
+    updateBallMode("idle");
+    if (state.panel) state.panel.hidden = true;
+    window.dispatchEvent(new Event("ytbt-page-changed"));
+  }
+
+  function isCurrentRun(token, pageUrl) {
+    syncPageIdentity();
+    return token === state.runToken && pageUrl === state.pageUrl;
+  }
+
+  async function waitForVisiblePage(token, pageUrl) {
+    if (!document.hidden || !isCurrentRun(token, pageUrl)) return;
+    await new Promise((resolve) => {
+      const resume = () => {
+        if (document.hidden && isCurrentRun(token, pageUrl)) return;
+        document.removeEventListener("visibilitychange", resume);
+        window.removeEventListener("pageshow", resume);
+        window.removeEventListener("ytbt-page-changed", resume);
+        resolve();
+      };
+      document.addEventListener("visibilitychange", resume);
+      window.addEventListener("pageshow", resume);
+      window.addEventListener("ytbt-page-changed", resume);
+    });
+  }
+
+  function isUncertainRequest(error) {
+    return /background did not respond|message (?:port|channel) closed|未返回结果|翻译接口响应超时/i.test(error && error.message || error);
+  }
+
+  async function recoverCachedTranslations() {
+    const recovery = state.recovery;
+    if (!recovery || state.recovering || document.hidden || !isCurrentRun(recovery.token, recovery.pageUrl)) return;
+    state.recovering = true;
+    try {
+      const pending = recovery.blocks.filter((block) => block.element.isConnected && block.container.dataset.ytbtState !== "done");
+      const items = await translateBatch(pending, true, recovery.pageUrl);
+      if (!isCurrentRun(recovery.token, recovery.pageUrl) || recovery !== state.recovery) return;
+      const byId = new Map(items.map((item) => [String(item.id), item.translatedText]));
+      for (const block of pending) {
+        if (byId.get(block.id)) renderTranslation(block, byId.get(block.id));
+      }
+      const remaining = recovery.blocks.filter((block) => block.element.isConnected && block.container.dataset.ytbtState !== "done").length;
+      if (!remaining) {
+        state.recovery = null;
+        state.translated = true;
+        updateBallMode("done");
+        showStatus("已从缓存恢复全部译文，没有重新请求翻译。");
+      } else {
+        showStatus(`已保留完成的译文，还有 ${remaining} 段未完成。切回页面时会再次检查缓存；点击翻译按钮可手动继续。`, true);
+      }
+    } catch (_) {
+      // A failed read must never become a paid retry. Keep recovery available
+      // for the next pageshow/visibility event or an explicit user click.
+      if (isCurrentRun(recovery.token, recovery.pageUrl) && recovery === state.recovery) {
+        showStatus("暂时无法读取译文缓存。请稍后切回页面，或刷新后点击翻译按钮。", true);
+      }
+    } finally {
+      state.recovering = false;
+    }
+  }
+
   async function translateCurrentPage() {
+    syncPageIdentity();
+    const pageUrl = state.pageUrl;
+    state.recovery = null;
     clearExistingTranslations();
     const blocks = collectBlocks();
     if (!blocks.length) {
@@ -529,45 +626,62 @@
 
       // Hydrate the whole page first so cached paragraphs never wait behind a
       // slow provider request. A cache read failure must not trigger paid work.
-      const cachedItems = await translateBatch(blocks, true);
-      if (token !== state.runToken) return;
+      const cachedItems = await translateBatch(blocks, true, pageUrl);
+      if (!isCurrentRun(token, pageUrl)) return;
       const pending = applyItems(blocks, cachedItems);
       let firstBatch = true;
       let failure = null;
       const worker = async () => {
         while (pending.length && !failure && token === state.runToken) {
+          await waitForVisiblePage(token, pageUrl);
+          if (!isCurrentRun(token, pageUrl) || failure || !pending.length) return;
           // Re-evaluate when a slot opens: scrolling changes what matters next.
           pending.sort((left, right) => viewportDistance(left) - viewportDistance(right));
           const batch = takeNextBatch(pending, firstBatch ? FIRST_BATCH_SIZE : BATCH_SIZE);
           firstBatch = false;
           try {
-            const items = await translateBatch(batch);
-            if (token !== state.runToken) return;
+            const items = await translateBatch(batch, false, pageUrl);
+            if (!isCurrentRun(token, pageUrl)) return;
             const missing = applyItems(batch, items);
             if (missing.length) throw new Error("Translation missing for some blocks. Click to retry.");
           } catch (error) {
+            if (!isCurrentRun(token, pageUrl)) return;
             // Stop scheduling after an error, but let already-sent requests
             // finish and render so a late success cannot overwrite error state.
             failure = failure || error;
+            for (const block of batch) {
+              if (block.container.dataset.ytbtState !== "done") {
+                renderTranslationError(block, isUncertainRequest(error) ? "等待恢复译文" : "此段翻译未完成，点击翻译按钮重试。");
+                if (isUncertainRequest(error)) block.container.dataset.ytbtState = "waiting";
+              }
+            }
           }
         }
       };
       await Promise.all(Array.from({ length: MAX_CONCURRENT_BATCHES }, () => worker()));
-      if (token !== state.runToken) return;
+      if (!isCurrentRun(token, pageUrl)) return;
       if (failure) throw failure;
 
       state.translated = true;
       updateBallMode("done");
       showStatus(`Done. Added ${translatedCount} bilingual translations.`);
     } catch (error) {
+      if (!isCurrentRun(token, pageUrl)) return;
       updateBallMode("error");
       const message = error && error.message ? error.message : String(error);
       for (const block of blocks) {
         if (block.container && block.container.dataset.ytbtState === "loading") {
-          renderTranslationError(block, message);
+          block.container.dataset.ytbtState = "paused";
+          block.container.hidden = true;
         }
       }
-      showStatus(`Translation failed: ${message}`, true);
+      if (isUncertainRequest(error)) {
+        state.recovery = { token, pageUrl, blocks };
+        showStatus("翻译响应暂时中断，已完成的译文会保留。正在检查缓存，不会自动重发付费请求。", true);
+        await recoverCachedTranslations();
+      } else {
+        showStatus(`翻译暂停：${message}`, true);
+      }
     }
   }
 
@@ -948,9 +1062,10 @@
 
   function renderTranslation(block, translatedText) {
     const container = block.container;
-    if (!container) {
+    if (!container || !block.element.isConnected) {
       return;
     }
+    container.hidden = false;
     const text = container.querySelector(".ytbt-immersive-text");
     if (text) {
       text.replaceChildren(renderInlineTranslation(block, translatedText));
@@ -990,10 +1105,10 @@
     return batch;
   }
 
-  async function translateBatch(batch, cacheOnly = false) {
+  async function translateBatch(batch, cacheOnly = false, pageUrl = state.pageUrl) {
     const response = await sendMessage({
       type: "IMMERSIVE_TRANSLATE",
-      pageUrl: location.href,
+      pageUrl,
       cacheOnly,
       items: batch.map((block) => ({
         id: block.id,
@@ -1011,7 +1126,7 @@
   }
 
   function sendMessage(message) {
-    return Core.sendRuntimeMessage(chrome.runtime, message, MESSAGE_TIMEOUT_MS);
+    return Core.sendRuntimeMessage(chrome.runtime, message, message.cacheOnly ? CACHE_MESSAGE_TIMEOUT_MS : MESSAGE_TIMEOUT_MS);
   }
 
   function storageGet(defaults) {

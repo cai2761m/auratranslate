@@ -631,6 +631,8 @@ async function translateWithRetry(request) {
       return await translateBatch(request);
     } catch (error) {
       lastError = error;
+      // An interrupted response may already have been billed. Do not replay it.
+      if (error.requestMayHaveReachedProvider) throw error;
       const message = (error && error.message) || String(error);
       if (isTruncationError(message)) {
         throw error;
@@ -755,7 +757,7 @@ async function translateBatch({
       payload.generationConfig.responseMimeType = "application/json";
     }
 
-    const response = await fetchWithTimeout(
+    const { response, bodyText } = await fetchWithTimeout(
       withApiKeyQuery(translationConfig.generateContentUrl, translationConfig.apiKey),
       {
         method: "POST",
@@ -766,7 +768,6 @@ async function translateBatch({
       }
     );
 
-    const bodyText = await response.text();
     if (!response.ok) {
       throw new Error(formatProviderRequestError(translationConfig.providerLabel, response.status, bodyText));
     }
@@ -811,7 +812,7 @@ async function translateBatch({
       payload.thinking = { type: "disabled" };
     }
 
-    const response = await fetchWithTimeout(translationConfig.chatCompletionsUrl, {
+    const { response, bodyText } = await fetchWithTimeout(translationConfig.chatCompletionsUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -820,7 +821,6 @@ async function translateBatch({
       body: JSON.stringify(payload)
     });
 
-    const bodyText = await response.text();
     if (!response.ok) {
       throw new Error(formatProviderRequestError(translationConfig.providerLabel, response.status, bodyText));
     }
@@ -917,12 +917,24 @@ function extractGeminiCandidateText(candidate) {
     .trim();
 }
 
-function fetchWithTimeout(url, options) {
+async function fetchWithTimeout(url, options) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  return fetch(url, Object.assign({}, options, { signal: controller.signal })).finally(() => {
+  try {
+    const response = await fetch(url, Object.assign({}, options, { signal: controller.signal }));
+    // fetch resolves at response headers; the body may still stall indefinitely.
+    const bodyText = await response.text();
+    return { response, bodyText };
+  } catch (error) {
+    if (controller.signal.aborted) {
+      const failure = new Error("翻译接口响应超时，请稍后查看缓存或手动重试；请求可能已经计费。");
+      failure.requestMayHaveReachedProvider = true;
+      throw failure;
+    }
+    throw error;
+  } finally {
     clearTimeout(timeout);
-  });
+  }
 }
 
 function delay(ms) {

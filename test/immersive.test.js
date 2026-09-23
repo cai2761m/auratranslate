@@ -8,7 +8,7 @@ const sharedScript = fs.readFileSync(path.join(__dirname, "../src/shared.js"), "
 const immersiveScript = fs.readFileSync(path.join(__dirname, "../src/immersive.js"), "utf8");
 
 async function translatePage(t, html, options = {}) {
-  const dom = new JSDOM(html, { url: "https://docs.flutter.dev/install/quick", runScripts: "outside-only" });
+  const dom = new JSDOM(html, { url: "https://docs.flutter.dev/install/quick", runScripts: "outside-only", pretendToBeVisual: true });
   t.after(() => dom.window.close());
   const { window } = dom;
   const requests = [];
@@ -271,6 +271,97 @@ test("long paragraphs remain within per-request character limits", async (t) => 
     assert.ok(request.items.length <= 8);
     assert.ok(request.items.reduce((total, item) => total + item.sourceText.length, 0) <= 7000);
   }
+});
+
+test("lost responses recover saved translations using cache-only requests without paid replays", async (t) => {
+  let cacheReads = 0;
+  const { document, requests } = await translatePage(t, paragraphs(8), {
+    sendMessage(message) {
+      if (message.cacheOnly) return ++cacheReads === 1 ? { ok: true, items: [] } : translatedResponse(message);
+      throw new Error("Translation request timeout: background did not respond.");
+    }
+  });
+  assert.equal(requests.filter((message) => !message.cacheOnly).length, 2);
+  assert.equal(cacheReads, 2);
+  assert.equal(document.querySelectorAll("[data-ytbt-immersive-translation][data-ytbt-state='done']").length, 8);
+  assert.equal(document.querySelectorAll("[data-ytbt-state='error']").length, 0);
+});
+
+test("returning to a tab restores late cached results but never resends uncertain or unsent work", async (t) => {
+  let ready = false;
+  const sent = new Set();
+  const { document, requests } = await translatePage(t, paragraphs(32), {
+    expectedState: "error",
+    sendMessage(message) {
+      if (message.cacheOnly) return { ok: true, items: ready
+        ? translatedResponse(message).items.filter((item) => sent.has(item.id)) : [] };
+      message.items.forEach((item) => sent.add(item.id));
+      throw new Error("The message port closed before a response was received.");
+    },
+    async afterStart({ window, requests }) {
+      await waitUntil(() => requests.filter((message) => message.cacheOnly).length === 2);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(window.document.querySelectorAll("[data-ytbt-state='error']").length, 1, "only the control shows an error, not every paragraph");
+      assert.equal(window.document.querySelectorAll("[data-ytbt-state='paused'][hidden]").length, 12);
+      const paidBefore = requests.filter((message) => !message.cacheOnly).length;
+      ready = true;
+      window.document.dispatchEvent(new window.Event("visibilitychange"));
+      window.dispatchEvent(new window.Event("pageshow"));
+      await waitUntil(() => window.document.querySelectorAll("[data-ytbt-immersive-translation][data-ytbt-state='done']").length === 20);
+      assert.equal(requests.filter((message) => !message.cacheOnly).length, paidBefore);
+    }
+  });
+  assert.equal(document.querySelectorAll("[data-ytbt-immersive-translation][data-ytbt-state='done']").length, 20);
+  assert.equal(requests.filter((message) => !message.cacheOnly).length, 3);
+});
+
+test("hidden tabs pause unsent batches and continue once visible without duplicating sent text", async (t) => {
+  const gates = [];
+  let hold = true;
+  const { requests } = await translatePage(t, paragraphs(32), {
+    sendMessage(message) {
+      if (message.cacheOnly) return { ok: true, items: [] };
+      if (!hold) return translatedResponse(message);
+      return new Promise((resolve) => gates.push(() => resolve(translatedResponse(message))));
+    },
+    async afterStart({ window, requests }) {
+      await waitUntil(() => gates.length === 3);
+      let hidden = true;
+      Object.defineProperty(window.document, "hidden", { get: () => hidden });
+      window.document.dispatchEvent(new window.Event("visibilitychange"));
+      hold = false;
+      gates.forEach((release) => release());
+      await waitUntil(() => window.document.querySelectorAll("[data-ytbt-immersive-translation][data-ytbt-state='done']").length === 20);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(requests.filter((message) => !message.cacheOnly).length, 3);
+      hidden = false;
+      window.document.dispatchEvent(new window.Event("visibilitychange"));
+    }
+  });
+  const ids = requests.filter((message) => !message.cacheOnly).flatMap((message) => Array.from(message.items, (item) => item.id));
+  assert.equal(ids.length, 32);
+  assert.equal(new Set(ids).size, 32);
+});
+
+test("SPA navigation discards late failures and retains the original request URL", async (t) => {
+  const gates = [];
+  const { document, requests } = await translatePage(t, paragraphs(32), {
+    expectedState: "idle",
+    sendMessage(message) {
+      if (message.cacheOnly) return { ok: true, items: [] };
+      return new Promise((resolve, reject) => gates.push(reject));
+    },
+    async afterStart({ window }) {
+      await waitUntil(() => gates.length === 3);
+      window.history.pushState({}, "", "/new-article");
+      window.document.querySelector("main").innerHTML = "<p>The next article must not receive the old errors.</p>";
+      gates.forEach((reject) => reject(new Error("Translation request timeout: background did not respond.")));
+    }
+  });
+  assert.equal(requests.length, 4);
+  assert.ok(requests.every((message) => message.pageUrl === "https://docs.flutter.dev/install/quick"));
+  assert.equal(document.querySelectorAll("[data-ytbt-immersive-translation]").length, 0);
+  assert.equal(document.querySelector(".ytbt-immersive-panel").hidden, true);
 });
 
 test("cached Dart paragraph restores inline code appearance without paid requests", async (t) => {
