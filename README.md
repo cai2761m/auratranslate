@@ -1,273 +1,163 @@
+[English](./README.md) | [简体中文](./README_zh.md)
+
 # AuraTranslate
 
-AuraTranslate is a Chrome Manifest V3 extension for AI-powered bilingual reading. It provides real-time Chinese-English subtitles on YouTube and Google Drive videos, plus immersive bilingual webpage translation on regular sites.
+**Bilingual video subtitles and webpage reading, powered by your own translation API.**
 
-The extension does not perform audio recognition. Video subtitle translation is based on existing YouTube caption tracks or Google Drive transcripts, while webpage translation extracts readable page text and translates it through your configured LLM API.
+AuraTranslate is a Manifest V3 browser extension that translates existing English subtitles on YouTube and Google Drive into Chinese, and adds translations below the original text on webpages. Choose Simplified or Traditional Chinese and connect an OpenAI-compatible Chat Completions API.
 
-## Highlights
+It uses existing caption tracks and transcripts. It does not record audio or transcribe videos without subtitles.
 
-- YouTube bilingual subtitles: detects English caption tracks, translates them into Simplified or Traditional Chinese, and renders a draggable bilingual overlay on the video.
-- Google Drive bilingual subtitles: reads an available Drive video transcript, pre-translates it, and renders the same overlay inside the embedded player.
-- Immersive webpage translation: adds a small side-docked floating translate button on normal webpages; click it to insert Chinese translations below the original text.
-- Separate API profiles: configure one LLM API for real-time subtitle translation and another for immersive webpage translation, or let immersive translation reuse the subtitle API.
-- Multiple providers: supports DeepSeek, Gemini, and custom OpenAI-compatible Chat Completions APIs.
-- LLM sentence segmentation: enabled by default, it regroups adjacent caption cues into complete sentences before translation and can be disabled in Settings.
-- ASR correction: optionally asks the model to fix obvious auto-caption recognition errors before translating.
-- Original technical terms: optionally appends source terms after translated terminology, such as `翻译 (Translation)`; enabled by default.
-- Incremental sentence segmentation: prepares small caption windows near playback first and starts translating each completed window without waiting for the entire video.
-- Economy mode: translates the current caption and the next 2 minutes by default, with a configurable 1/2/3-minute lookahead. Playback and seeks reprioritize unsent work. Full-video translation remains available in Settings.
-- Translation cache: stores successful subtitle translations in `chrome.storage.local` to reduce repeated API calls.
-- Draggable controls: subtitle overlay position and immersive translate button position are persisted locally.
+## Features
 
-## Installation
+- **Bilingual video subtitles** — display English and Chinese together, drag the overlay to reposition it, and adjust subtitle size.
+- **Progressive subtitle translation** — start near the current playback position, then prepare and translate additional caption windows as needed.
+- **Economy mode** — translate the current position and the next 2 minutes by default. Choose a 1, 2, or 3-minute lookahead, or translate the full video.
+- **Sentence-aware translation** — optional LLM sentence segmentation, correction of obvious auto-caption errors, and original technical terms alongside their translations.
+- **Immersive webpage translation** — translate readable headings, paragraphs, lists, callouts, and page outlines while retaining the original text.
+- **Inline formatting** — preserve common code, emphasis, links, and line breaks in new webpage translations, with a plain-text fallback when model output cannot preserve formatting.
+- **Separate API settings** — use one API for subtitles and another for webpages, or share the subtitle configuration.
+- **Local cache** — reuse saved subtitle and webpage translations across refreshes and background restarts. Cached webpage text appears before new API requests.
 
-1. Download or clone this repository.
-2. Open `chrome://extensions`.
-3. Enable `Developer mode`.
-4. Click `Load unpacked`.
-5. Select the project folder.
-6. Click the AuraTranslate extension icon, then click `Settings` to configure API keys.
+## Quick start
 
-### Android (Firefox for Android)
+### 1. Install from source
 
-Android Chrome cannot install browser extensions directly. AuraTranslate now includes Firefox for Android compatibility (Firefox for Android 142 or later). It runs on YouTube in Firefox, not inside the native YouTube app.
+Clone the repository, or download and extract its ZIP:
 
-For development testing, connect an Android device to your computer over USB/Wi-Fi:
-
-```powershell
-npm install --global web-ext
-adb devices
-web-ext run --target=firefox-android --android-device=<device-id> --firefox-apk=org.mozilla.firefox
+```sh
+git clone https://github.com/cai2761m/auratranslate.git
 ```
 
-For normal distribution, use a Mozilla-signed `.xpi` package:
+In Chrome:
 
-1. In Firefox for Android, open **Settings → About Firefox**.
-2. Tap the Firefox logo five times to unlock the developer menu.
-3. Return to **Settings** and choose **Install Extension from File**.
-4. Select the signed `.xpi` file and confirm installation.
+1. Open `chrome://extensions`.
+2. Enable **Developer mode**.
+3. Click **Load unpacked** and select the `auratranslate` folder containing `manifest.json`.
+4. Open AuraTranslate from the extensions menu and click **设置** (Settings).
 
-After installation, open AuraTranslate from Firefox's extensions menu, enter your translation API key, and visit a YouTube video with English captions. Portrait mode, landscape mode, and touch-drag subtitle positioning are supported.
+No build step or npm installation is needed to load the extension. Node.js dependencies are only needed for development tests.
 
-**0.3.1 touch-drag fix**: touch the subtitle text and move your finger; release to save its position. This version adds a dedicated touch-event path and preserves drag listeners when the player container is replaced. To update an existing 0.3.0 installation, upload 0.3.1 as a new version of the same add-on in the Mozilla Developer Hub and install the resulting signed `.xpi`. Updating the GitHub source alone does not update the installed extension. Automated interaction tests cover this fix; Android device verification is still needed.
+### 2. Configure your API
 
-**0.3.2 background connection recovery**: in response to reports of `Receiving end does not exist` after seeking on Android, explicit pre-delivery connection failures now get up to three short reconnect attempts. Persistent failures show a recovery hint; seeking again retries undelivered failed cues without resetting translated or in-flight cues. Ambiguous port-closure errors are not automatically replayed by the transport. Automated tests cover reconnects, seeking, and background-script startup, but the reported issue has not yet been reproduced and verified on an Android device. Upload **0.3.2** as a new version of the same Mozilla add-on, install its signed `.xpi` on the phone, and refresh existing YouTube tabs.
+Under **实时字幕翻译 API** (Real-time subtitle API), enter:
 
-**0.3.3 font-size range**: Settings → Font Scale now supports 0.30–3.00x in 0.05x steps. If subtitles feel too large on a phone, try 0.55x and save settings. Existing values are preserved; resizing does not retranslate subtitles. Upload 0.3.3 for Mozilla signing, update the phone with the signed `.xpi`, then refresh existing video tabs.
-
-Note: a temporary development extension may be removed when Firefox exits; regular users should install a Mozilla-signed package. Google Chrome for Android and the native YouTube app are not supported.
-
-## Usage
-
-**0.3.8 page lifecycle and timeout recovery**: Hidden tabs pause new webpage translation batches and resume pending work when visible; already-sent requests may still finish and cache results. After an ambiguous message timeout or closed channel, recovery only reads the cache, including on tab return or page restoration, and never automatically replays uncertain paid requests. Completed translations remain visible; unsent paragraphs no longer repeat the same red error. Click translate to manually continue missing work. URL changes invalidate old runs and keep each request tied to its original page. Provider deadlines now cover response bodies, and the webpage deadline includes the background retry budget. Reload the extension and refresh the page without clearing the cache. Simulated lifecycle and timeout tests cover the fix; the original reported browser incident has not been reproduced live.
-
-**0.3.7 incremental subtitles and economy mode**: Sentence segmentation now processes small windows near the current playback position first. Each completed window can translate immediately. The default economy mode translates only captions overlapping the current position and the next 2 minutes. Under **Settings → General → Subtitle translation scope**, choose full-video translation or configure a 1/2/3-minute lookahead. Full-video mode also starts near playback before working through the rest.
-
-Seeking, reducing lookahead, or disabling subtitles adjusts unsent work. Already-sent requests may still incur charges and are allowed to finish and cache their results. Segmentation favors sentence endings and may include a small amount of context outside the translation horizon at window boundaries. Both prepared windows and remaining source captions are saved, so refresh can resume partial progress. Changing scope or lookahead preserves the cache; older complete snapshots remain readable. Reload the extension and refresh the video after updating; no cache clearing is needed. Actual first-caption latency still depends on caption retrieval and provider response times.
-
-**0.3.6 webpage formatting**: New translations preserve common inline formatting, including code, bold, italics, links, subscripts, superscripts and line breaks. Identifiers such as `readAsString()` and `readAsLines()` retain the source code appearance. Existing plain-text cache entries remain reusable: unchanged code literals are styled locally without another API call, although translated emphasis and link text in old entries cannot be reliably aligned. Missing or malformed model formatting markers fall back to plain text with code styling where possible. Reload the extension, refresh the page and click translate after updating; there is no need to clear the cache.
-
-**0.3.5 webpage translation speed**: Content near the current viewport goes first, with up to 4 blocks in the first batch, then up to 8 per batch and 3 concurrent batches. Pending work is reprioritized as you scroll. Cached paragraphs render before any provider calls; only missing text is requested, with duplicate text and in-flight requests shared on the same page. The cache survives refreshes and background restarts and is scoped to the source text, page, model, endpoint, languages and cache version. It shares the subtitle cache item budget, retains up to 240 paragraphs per page, and is removed by the existing Clear Translation Cache action. Clicking translate after a failure reuses saved successes. Speed depends on provider latency and rate limits. Reload the extension and refresh the page after updating.
-
-**0.3.4 webpage coverage fix**: Immersive translation now includes article callouts, their short titles, and page outlines (including the Flutter docs sidebar), while excluding decorative icon text. For an unpacked installation, reload the extension, refresh the webpage, and click translate. Signed installations require an updated extension package.
-
-### YouTube Subtitles
-
-1. Open a YouTube video that has English captions.
-2. AuraTranslate reads the available caption track.
-3. Captions are merged, translated, cached, and displayed as Chinese-English subtitles on top of the video.
-4. Drag the subtitle overlay to reposition it. On Google Drive, AuraTranslate relays the
-   gesture through Drive's transparent player layer.
-
-### Google Drive Subtitles
-
-1. Open a Google Drive video that has a transcript.
-2. AuraTranslate briefly opens the transcript panel to read its timestamped cues, then restores the panel.
-3. The transcript is merged, translated, cached, and displayed inside the Drive video player.
-
-### Immersive Webpage Translation
-
-1. Open a regular webpage with readable English content.
-2. Click the small floating translation button docked on the right side of the page.
-3. AuraTranslate translates headings, paragraphs, list items, blockquotes, captions, and common article header text.
-4. Chinese translations are inserted near the original text for side-by-side reading.
-5. Drag the floating button up or down to reposition it.
-
-## Configuration
-
-Open the extension popup and click `Settings`.
-
-### Real-Time Subtitle Translation API
-
-This API profile is used by YouTube subtitle translation.
-
-| Field | Description |
+| Setting | What to enter |
 | --- | --- |
-| Translation Provider | DeepSeek, Gemini, or a custom OpenAI-compatible API |
-| API Key | API key for the selected provider |
-| Base URL | API endpoint; DeepSeek and Gemini can be auto-filled |
-| Model | Model name; DeepSeek and Gemini can be auto-filled |
-| JSON Response Mode | Requests structured JSON output when supported |
+| Translation service | **OpenAI-compatible API**, the only service type in the settings UI |
+| API Key | Your provider's API key |
+| Base URL | Your provider's Chat Completions base URL, including its version path if required |
+| Model | An exact model ID available through that endpoint |
+| JSON output mode | Enabled by default; disable it if your endpoint rejects JSON response mode |
 
-### Immersive Translation API
+For example, `https://api.example.com/v1` becomes `https://api.example.com/v1/chat/completions`. A complete URL ending in `/chat/completions` is also accepted. This is a placeholder: replace it with your provider's actual endpoint. Do not enter a website homepage or a native API endpoint with a different protocol.
 
-This API profile is used by webpage translation.
+Under **沉浸式翻译 API** (Immersive translation API), keep **沿用实时字幕 API** to share these settings, or select **OpenAI-compatible API** and fill in a separate key, base URL, and model.
 
-By default, immersive translation reuses the real-time subtitle API. Select a provider in this section only when you want immersive translation to call a different API, model, or endpoint.
+Click **保存设置** (Save settings). The extension does not include an API key; API usage is billed according to your provider's terms.
 
-### General Settings
+### 3. Start translating
 
-| Setting | Description |
+**YouTube:** open a video with English captions and keep **启用视频实时翻译** enabled in the popup. The extension reads the caption track and displays bilingual subtitles as translations become available. Drag the subtitle text to move it.
+
+**Google Drive:** open a video that exposes a transcript. AuraTranslate briefly opens the transcript panel to read timestamped text, restores the panel, and displays bilingual subtitles inside the embedded player.
+
+**Webpages:** open a page with readable English text and click the floating translation button on the right. Translations appear below the original text, with content near the viewport prioritized. Once translation finishes, click the button to hide or show translations. Drag the button vertically to reposition it.
+
+## Subtitle settings
+
+| Setting | Behavior and default |
 | --- | --- |
-| LLM Sentence Segmentation | Regroups cross-cue sentences with the real-time subtitle model before translation; enabled by default |
-| ASR Correction | Fix obvious YouTube auto-caption recognition errors before translation |
-| Original Technical Terms | Appends source-language terms after translated subtitle terminology; enabled by default |
-| Source Language | Currently English |
-| Target Language | Simplified Chinese or Traditional Chinese |
-| Font Scale | Subtitle overlay size, from `0.30x` to `3.00x` in `0.05x` steps; default `1.00x` |
-| Subtitle Enabled | Enables the custom subtitle overlay and hides native YouTube CC captions |
+| Translation scope | Economy mode by default; full-video mode also starts near playback before processing the rest |
+| Lookahead | 2 minutes by default; choose 1, 2, or 3 minutes in economy mode |
+| LLM sentence segmentation | Enabled; combines adjacent caption fragments into complete sentences before translation |
+| ASR correction | Enabled; asks the model to correct obvious recognition errors in existing caption text |
+| Original technical terms | Enabled; displays terms such as `翻译 (Translation)` in subtitle translations |
+| Source / target language | English → Simplified Chinese by default; Traditional Chinese is also available |
+| Subtitle size | `1.00×` by default; range `0.30×–3.00×`, in `0.05×` steps |
+| Subtitle switch | Enabled; hides native subtitles while the custom subtitle overlay is active |
 
-## Provider Notes
+On smaller screens, try `0.50×–0.65×` and save. Font-size changes do not require new translations. LLM sentence segmentation uses the subtitle API and can generate additional requests; disabling it falls back to local caption merging.
 
-### DeepSeek
+## Cache and request behavior
 
-DeepSeek is the default provider. You usually only need to provide an API key.
+Successful subtitle translations, prepared caption windows, and webpage translations are stored in `chrome.storage.local`.
 
-Default base URL:
+- Refreshing a page reuses matching saved results and requests missing text. Fully cached content does not need another translation request.
+- Changing the model, endpoint, language, or relevant subtitle processing settings can require new translations. Switching subtitle scope or lookahead preserves cached progress.
+- Seeking or disabling subtitles adjusts work that has not yet been sent. Already-sent requests may finish and incur charges.
+- Hidden webpage tabs pause new translation batches. Returning to the tab resumes pending work.
+- After an ambiguous timeout or closed message channel, webpage recovery checks the cache without automatically replaying uncertain paid requests. Completed translations remain visible; click the button to manually continue missing work when necessary.
+- **清空翻译缓存** clears subtitle and webpage translation caches. Subsequent translation may call the API again. Cache size is limited, so older entries can be evicted.
 
-```text
-https://api.deepseek.com
-```
+A refresh does not force the extension to fetch changed source captions when a prepared timeline is available. If a video's captions have been updated, clear the translation cache to read them again.
 
-Default model:
+## Browser support and updates
 
-```text
-deepseek-v4-flash
-```
+The repository includes Chrome's service-worker background configuration and Firefox's background-script configuration. The manifest declares Firefox desktop **140+** and Firefox for Android **142+**.
 
-### Gemini
+For Android, use the website in Firefox with a Mozilla-signed extension package. This repository's source folder is not an installable signed package. Touch dragging and background recovery have automated coverage; that does not establish compatibility with every device or website. The native YouTube app is outside the extension's scope.
 
-Gemini uses Google's GenerateContent API.
+To update an unpacked installation:
 
-Default base URL:
+1. Update the local source, for example with `git pull` if you cloned the repository.
+2. Reload AuraTranslate in the browser's extension management page.
+3. Refresh existing video and webpage tabs.
 
-```text
-https://generativelanguage.googleapis.com/v1beta
-```
+An installed signed extension needs an updated signed package. Pulling GitHub changes alone does not update that installation. Routine updates do not require clearing the cache.
 
-Default model:
+## Privacy and permissions
 
-```text
-gemini-3.5-flash
-```
-
-### Custom OpenAI-Compatible API
-
-Use this option for relay services or model providers that implement the OpenAI Chat Completions API.
-
-Example:
-
-| Field | Example |
+| Permission / data | Purpose |
 | --- | --- |
-| API Key | `sk-...` |
-| Base URL | `https://api.example.com/v1` |
-| Model | `model-name` |
+| `storage` | Save API settings, translation caches, subtitle position, and floating-button position locally |
+| HTTP / HTTPS host access | Read supported page content, render translations, and call the configured API, including local endpoints |
+| YouTube / Drive page access | Read caption metadata or transcript text and display the subtitle overlay |
 
-If your provider does not support OpenAI JSON mode, disable `JSON Response Mode`. AuraTranslate will still try to recover usable translation JSON from the model response.
+Translation sends selected caption or webpage text to the API endpoint you configure. LLM sentence segmentation also sends caption text to that endpoint. API keys are stored in browser extension local storage; the project does not add encryption for stored keys. The password input masks the key on screen only.
 
-## Cache Behavior
-
-Subtitle translations are cached by:
-
-- video id
-- caption track fingerprint
-- provider
-- API endpoint
-- model
-- source language
-- target language
-- ASR correction mode
-- original technical-term display mode
-- LLM sentence segmentation mode and version
-- caption merge version
-- cache version
-
-A new API request is expected when a cue has not been translated before, the API configuration changes, the source or target language changes, LLM sentence segmentation, ASR correction, or original technical-term display changes, the cache is cleared, or the segmentation/merge algorithm version changes. Sentence segmentation results are cached separately and reused for the same video, track, model, and source language.
-
-The extension also saves the latest 40 prepared caption timelines. Reloading restores the timeline and reads all available translations before queuing only missing cues. A fully cached video needs no caption fetch, segmentation, or translation request. Signed YouTube URLs, localized track names, and API-key rotation do not invalidate saved results. Parallel translation batches merge their writes in order, and successful results are acknowledged only after storage completes. Storage failures are reported instead of silently discarding translations.
-
-The translation cache defaults to roughly 2,000 cues, evicting the least recently updated video caches when needed (excluding the video currently being written). Evicted translations must be generated again. If a video's source captions have changed, clear the cache in Settings to fetch the updated captions.
-
-Immersive webpage translations are currently generated on demand and inserted into the page during the current session.
-
-## Permissions
-
-AuraTranslate uses:
-
-- `storage`: saves API settings, subtitle cache, overlay position, and floating button position.
-- `https://www.youtube.com/*`: reads YouTube caption metadata and renders bilingual subtitles.
-- `https://drive.google.com/file/*` and `https://youtube.googleapis.com/embed/*`: read Drive transcript cues and render subtitles inside its embedded player.
-- `http://*/*` and `https://*/*`: injects the immersive webpage translation button and translation renderer.
-
-## Project Structure
-
-```text
-manifest.json              Chrome extension manifest
-package.json               Project metadata and npm scripts
-src/
-  background.js            Service worker for API calls, cache, and message routing
-  content.js               Video caption loading, translation queue, and subtitle overlay
-  drive.js                 Google Drive transcript extraction and player bridge
-  immersive.js             Webpage text extraction and immersive translation renderer
-  shared.js                Shared settings, caption parsing, merging, and config helpers
-  overlay.css              YouTube subtitle overlay styles
-  immersive.css            Webpage translation button and inline translation styles
-  page-bridge.js           Injected YouTube page bridge for player metadata
-popup/
-  popup.html               Lightweight extension popup
-  popup.css                Popup styles
-  popup.js                 Opens the options page from the popup
-options/
-  options.html             Settings page
-  options.css              Settings page styles
-  options.js               Settings persistence and provider switching
-test/
-  subtitle-utils.test.js   Unit tests for parsing, merging, config, and errors
-```
-
-## Development
-
-Run tests:
-
-```powershell
-node --test
-```
-
-Check JavaScript syntax:
-
-```powershell
-node --check src\background.js
-node --check src\content.js
-node --check src\immersive.js
-node --check options\options.js
-node --check popup\popup.js
-```
-
-If PowerShell blocks `npm.ps1`, run `node --test` directly or use:
-
-```powershell
-npm.cmd test
-```
+The current source does not include a separate AuraTranslate account service or analytics endpoint. Your API provider handles the text you send under its own data policies.
 
 ## Troubleshooting
 
-- No YouTube subtitles: confirm the video has an English caption track available in YouTube's native CC menu.
-- No Google Drive subtitles: confirm the video exposes the Drive transcript panel; AuraTranslate does not transcribe audio itself.
-- API key error: open AuraTranslate settings and confirm the provider, API key, base URL, and model.
-- Translation returns malformed content: try enabling `JSON Response Mode`; if the provider does not support it, disable it and retry.
-- Immersive translation misses content: some websites render text in custom components or protected regions. Try refreshing the page, scrolling the content into view, then clicking the floating button again.
-- Native YouTube captions still appear: turn off YouTube's CC button or reload the page after enabling AuraTranslate subtitles.
+| Problem | What to check |
+| --- | --- |
+| No video subtitles | Enable the popup switch; confirm YouTube has English captions or Drive exposes a transcript. Videos without available text cannot be transcribed by this extension. |
+| API key / model error | Check the key, exact model ID, and Chat Completions base URL. Confirm the account can access that model. |
+| JSON output error | If the service rejects JSON response mode, disable it. If supported, enabling it can help the model return structured output. |
+| Translation is slow | First results depend on caption retrieval and API latency. Use economy mode with a shorter lookahead to reduce queued work. |
+| Timeout after changing tabs | Return to the page so cached results can recover. If work remains incomplete, manually continue with the translation button. Avoid clearing useful cache as the first step. |
+| Webpage content is skipped | Form controls, code blocks, decorative content, and explicitly excluded regions are skipped. Text in images, canvas, nested frames, or unsupported page structures may not be extracted. Each pass selects up to 240 text blocks. |
+| Extension stops working after an update | Reload the extension and refresh the affected tabs. |
+| Source captions changed but old text remains | Clear the translation cache in Settings, then refresh the video. |
 
-## License
+When reporting an issue, include the browser/version, page URL, reproduction steps, and error text. Remove API keys and other private information from screenshots or logs.
 
-MIT
+## Development
+
+The extension uses plain JavaScript, HTML, and CSS. Tests use Node's built-in test runner and jsdom. Use a Node.js version accepted by the locked jsdom dependency: `^22.22.2`, `^24.15.0`, or `>=26.0.0`.
+
+```sh
+npm ci
+npm test
+```
+
+On Windows, use `npm.cmd ci` and `npm.cmd test` if PowerShell blocks `npm.ps1`.
+
+The test suite covers caption parsing, configuration persistence, sentence segmentation, caching, webpage extraction and formatting, tab lifecycle recovery, message timeouts, and subtitle dragging. Tests simulate browser behavior; live API and device checks remain separate.
+
+```text
+manifest.json       Extension metadata, permissions, and entry points
+src/
+  background.js     API requests, cache persistence, and message routing
+  content.js        Video captions, playback scheduling, and subtitle overlay
+  drive.js          Drive transcript extraction and embedded-player bridge
+  immersive.js      Webpage extraction, translation scheduling, and rendering
+  shared.js         Settings, caption utilities, and API configuration
+  page-bridge.js    YouTube player metadata and caption request bridge
+  overlay.css       Subtitle styles
+  immersive.css     Webpage translation styles
+options/            Settings interface
+popup/              Subtitle switch and settings entry point
+test/               Automated tests and fixtures
+```
