@@ -451,7 +451,10 @@ async function handleImmersiveTranslate(message) {
   const cues = (Array.isArray(message.items) ? message.items : [])
     .map((item) => ({
       id: item && item.id != null ? String(item.id) : "",
-      sourceText: Core.normalizeSubtitleText(item && item.sourceText)
+      sourceText: item && item.formattedText
+        ? String(item.formattedText).replace(/\s+/g, " ").trim()
+        : Core.normalizeSubtitleText(item && item.sourceText),
+      plainText: Core.normalizeSubtitleText(item && item.sourceText)
     }))
     .filter((item) => item.id && item.sourceText);
 
@@ -473,17 +476,21 @@ async function handleImmersiveTranslate(message) {
     sourceLanguage, targetLanguage, settings.cacheVersion || "1", "immersive-v1"
   ]))}`;
   const identities = await Promise.all(cues.map(async (cue) => ({
-    ...cue, cacheId: await immersiveFingerprint(cue.sourceText)
+    ...cue, cacheId: await immersiveFingerprint(cue.sourceText),
+    plainId: await immersiveFingerprint(cue.plainText)
   })));
-  const uniqueCues = new Map(identities.map((cue) => [cue.cacheId, { id: cue.cacheId, sourceText: cue.sourceText }]));
+  const uniqueCues = new Map(identities.map((cue) => [cue.cacheId, { ...cue, id: cue.cacheId }]));
   const cache = await storageGet({ [cacheKey]: { items: {} } });
   const storedItems = cache[cacheKey] && cache[cacheKey].items || {};
   const results = new Map();
   const missing = [];
   for (const cue of uniqueCues.values()) {
     const stored = storedItems[cue.id];
+    const legacy = storedItems[cue.plainId];
     if (stored && stored.sourceText === cue.sourceText && typeof stored.translatedText === "string" && stored.translatedText.trim()) {
       results.set(cue.id, { translatedText: stored.translatedText, cached: true });
+    } else if (legacy && legacy.sourceText === cue.plainText && typeof legacy.translatedText === "string" && legacy.translatedText.trim()) {
+      results.set(cue.id, { translatedText: legacy.translatedText, cached: true });
     } else {
       missing.push(cue);
     }
@@ -706,6 +713,7 @@ async function translateBatch({
       : mode === "immersive"
         ? `You are an immersive webpage translation engine. Translate ${sourceLabel} webpage text into natural ${targetLabel}. ` +
           "Do not summarize, omit, merge, or split items. Preserve URLs, code identifiers, numbers, names, product names, and formatting-sensitive symbols. " +
+          "Preserve every paired [[YTBT_TAG_N]] and [[/YTBT_TAG_N]] formatting marker exactly once, with correct nesting, around the corresponding translated words; markers may move with those words. Translate text inside emphasis and link markers, but keep text inside CODE, KBD and SAMP markers unchanged. Keep BR marker pairs empty. Do not add HTML or Markdown formatting. " +
           "Keep the translation faithful and readable as a bilingual paragraph shown under the original text. " +
           outputInstruction
         : `You are a subtitle translation engine. Translate ${sourceLabel} subtitles into natural ${targetLabel}. ` +

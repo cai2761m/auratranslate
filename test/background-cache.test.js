@@ -182,6 +182,39 @@ test("immersive partial hydration never calls provider and only missing text is 
   assert.deepEqual(fixture.inputs[1].map((item) => item.text), ["New paragraph"]);
 });
 
+test("formatted immersive paragraphs send and cache markers with distinct format identities", async () => {
+  const fixture = createFixture();
+  const sourceText = "Read the guide carefully.";
+  const formattedText = "Read [[YTBT_STRONG_0]]the guide[[/YTBT_STRONG_0]] carefully.";
+  const message = immersiveMessage([], { items: [{ id: "im0", sourceText, formattedText }] });
+  const response = await fixture.startWorker().request(message);
+  assert.equal(response.ok, true);
+  assert.equal(fixture.inputs[0][0].text, formattedText);
+  const hit = await fixture.startWorker().request({ ...message, cacheOnly: true });
+  assert.equal(hit.items[0].translatedText, `Translated: ${formattedText}`);
+  assert.equal(fixture.fetchCount, 1);
+  const changed = await fixture.startWorker().request({ ...message, cacheOnly: true,
+    items: [{ id: "im0", sourceText, formattedText: formattedText.replaceAll("STRONG", "EM") }] });
+  assert.equal(changed.items.length, 0);
+  const plain = await fixture.startWorker().request(immersiveMessage([sourceText], { cacheOnly: true }));
+  assert.equal(plain.items.length, 0, "format markers must never leak into an unformatted paragraph");
+});
+
+test("formatted immersive paragraphs reuse existing plain cache without rebilling", async () => {
+  const fixture = createFixture();
+  const sourceText = "Use readAsString() to read the file.";
+  await fixture.startWorker().request(immersiveMessage([sourceText]));
+  const message = immersiveMessage([], { items: [{ id: "im0", sourceText,
+    formattedText: "Use [[YTBT_CODE_0]]readAsString()[[/YTBT_CODE_0]] to read the file." }] });
+  for (const cacheOnly of [true, false]) {
+    const response = await fixture.startWorker().request({ ...message, cacheOnly });
+    assert.equal(response.ok, true);
+    assert.equal(response.items[0].translatedText, `Translated: ${sourceText}`);
+    assert.equal(response.items[0].cached, true);
+  }
+  assert.equal(fixture.fetchCount, 1);
+});
+
 test("immersive parallel writes merge without losing paragraphs", async () => {
   const fixture = createFixture();
   const worker = fixture.startWorker();

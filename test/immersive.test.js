@@ -21,7 +21,7 @@ async function translatePage(t, html, options = {}) {
   const getComputedStyle = window.getComputedStyle.bind(window);
   window.getComputedStyle = (element) => {
     const style = getComputedStyle(element);
-    return { display: style.display, visibility: style.visibility, opacity: style.opacity || "1" };
+    return { display: style.display, visibility: style.visibility, opacity: style.opacity || "1", getPropertyValue: style.getPropertyValue.bind(style) };
   };
   window.chrome = {
     runtime: {},
@@ -271,4 +271,83 @@ test("long paragraphs remain within per-request character limits", async (t) => 
     assert.ok(request.items.length <= 8);
     assert.ok(request.items.reduce((total, item) => total + item.sourceText.length, 0) <= 7000);
   }
+});
+
+test("cached Dart paragraph restores inline code appearance without paid requests", async (t) => {
+  const { document, requests } = await translatePage(t, `<style>
+    p > code { background-color: rgb(240, 242, 244); border: 1px solid gray; border-radius: 4px; font-family: monospace; padding: 2px; }
+    </style><main><p>When reading a text file, use <code id="read" class="language-dart" onclick="alert(1)">readAsString()</code>
+    or use <code>readAsLines()</code> when individual lines are important.</p></main>`, {
+    sendMessage(message) {
+      assert.equal(message.cacheOnly, true);
+      return { ok: true, items: [{ id: message.items[0].id, translatedText: "读取文本文件时，使用 readAsString()。需要逐行读取时，使用 `readAsLines()`。" }] };
+    }
+  });
+  assert.equal(requests.length, 1);
+  const translation = document.querySelector(".ytbt-immersive-text");
+  assert.deepEqual(Array.from(translation.querySelectorAll("code"), (node) => node.textContent), ["readAsString()", "readAsLines()"]);
+  const code = translation.querySelector("code");
+  assert.equal(code.style.backgroundColor, "rgb(240, 242, 244)");
+  assert.equal(code.style.fontFamily, "monospace");
+  assert.equal(code.style.borderRadius, "4px");
+  assert.equal(code.className, "language-dart");
+  assert.equal(code.hasAttribute("id"), false);
+  assert.equal(code.hasAttribute("onclick"), false);
+  assert.equal(document.querySelectorAll("#read").length, 1);
+  assert.equal(translation.textContent, "读取文本文件时，使用 readAsString()。需要逐行读取时，使用 readAsLines()。");
+});
+
+test("new translations preserve reordered nested formatting, links, breaks and exact code", async (t) => {
+  const { document, requests } = await translatePage(t, `<main><p>Read <strong>the <em>important</em> guide</strong>
+    at <a href="/guide" onclick="alert(1)">this link</a><br>and call <code>readAsString()</code> for the entire file.</p></main>`, {
+    sendMessage(message) {
+      if (message.cacheOnly) return { ok: true, items: [] };
+      assert.match(message.items[0].formattedText, /\[\[YTBT_CODE_4\]\]readAsString\(\)\[\[\/YTBT_CODE_4\]\]/);
+      return { ok: true, items: [{ id: message.items[0].id, translatedText:
+        "通过[[YTBT_A_2]]此链接[[/YTBT_A_2]]阅读[[YTBT_STRONG_0]][[YTBT_EM_1]]重要[[/YTBT_EM_1]]指南[[/YTBT_STRONG_0]][[YTBT_BR_3]][[/YTBT_BR_3]]并调用[[YTBT_CODE_4]]changedByModel()[[/YTBT_CODE_4]]读取整个文件。" }] };
+    }
+  });
+  assert.equal(requests.length, 2);
+  const translation = document.querySelector(".ytbt-immersive-text");
+  assert.equal(translation.querySelector("strong > em").textContent, "重要");
+  assert.equal(translation.querySelector("a").getAttribute("href"), "/guide");
+  assert.equal(translation.querySelector("a").hasAttribute("onclick"), false);
+  assert.equal(translation.querySelectorAll("br").length, 1);
+  assert.equal(translation.querySelector("code").textContent, "readAsString()");
+  assert.equal(translation.textContent, "通过此链接阅读重要指南并调用readAsString()读取整个文件。");
+});
+
+test("malformed or missing formatting markers fall back to safe text and literal code", async (t) => {
+  for (const translatedText of [
+    "[[YTBT_CODE_0]]readAsString() 未闭合。",
+    "[[YTBT_CODE_99]]readAsString()[[/YTBT_CODE_99]] 未知标记。",
+    "使用 readAsString() 和 readAsString()。"
+  ]) {
+    const { document } = await translatePage(t, `<main><p>Use <code>readAsString()</code> to read the whole text file.</p></main>`, {
+      sendMessage: (message) => ({ ok: true, items: [{ id: message.items[0].id, translatedText }] })
+    });
+    const translation = document.querySelector(".ytbt-immersive-text");
+    assert.ok(translation.querySelector("code"));
+    assert.doesNotMatch(translation.textContent, /YTBT_/);
+    assert.equal(translation.textContent, translatedText.replace(/\[\[\/?YTBT_[A-Z]+_\d+\]\]/g, ""));
+  }
+});
+
+test("formatting copies no active source attributes and keeps code-like HTML inert", async (t) => {
+  const { document } = await translatePage(t, `<main><p>Compare <code>&lt;img src=x onerror=alert(1)&gt;</code>
+    with <a href="javascript:alert(1)">this unsafe link</a> in the example.</p></main>`, {
+    sendMessage: (message) => ({ ok: true, items: [{ id: message.items[0].id, translatedText:
+      "比较 [[YTBT_CODE_0]]example[[/YTBT_CODE_0]] 与 [[YTBT_A_1]]链接[[/YTBT_A_1]]。" }] })
+  });
+  const translation = document.querySelector(".ytbt-immersive-text");
+  assert.equal(translation.querySelector("code").textContent, "<img src=x onerror=alert(1)>");
+  assert.equal(translation.querySelector("a").hasAttribute("href"), false);
+  assert.equal(translation.querySelector("img, [onerror], [onclick]"), null);
+});
+
+test("legacy code matching handles overlapping identifiers without styling substrings", async (t) => {
+  const { document } = await translatePage(t, `<main><p>Use <code>read</code> or <code>readAsString()</code> to read the whole file.</p></main>`, {
+    sendMessage: (message) => ({ ok: true, items: [{ id: message.items[0].id, translatedText: "bread 和 readAsString()、read、readAsString()。" }] })
+  });
+  assert.deepEqual(Array.from(document.querySelectorAll(".ytbt-immersive-text code"), (node) => node.textContent), ["readAsString()", "read", "readAsString()"]);
 });
