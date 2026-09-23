@@ -14,7 +14,8 @@ The extension does not perform audio recognition. Video subtitle translation is 
 - LLM sentence segmentation: enabled by default, it regroups adjacent caption cues into complete sentences before translation and can be disabled in Settings.
 - ASR correction: optionally asks the model to fix obvious auto-caption recognition errors before translating.
 - Original technical terms: optionally appends source terms after translated terminology, such as `翻译 (Translation)`; enabled by default.
-- Priority scheduling: translates captions near the current playback position first, then continues pre-translating the rest of the video.
+- Incremental sentence segmentation: prepares small caption windows near playback first and starts translating each completed window without waiting for the entire video.
+- Economy mode: translates the current caption and the next 2 minutes by default, with a configurable 1/2/3-minute lookahead. Playback and seeks reprioritize unsent work. Full-video translation remains available in Settings.
 - Translation cache: stores successful subtitle translations in `chrome.storage.local` to reduce repeated API calls.
 - Draggable controls: subtitle overlay position and immersive translate button position are persisted locally.
 
@@ -57,6 +58,10 @@ After installation, open AuraTranslate from Firefox's extensions menu, enter you
 Note: a temporary development extension may be removed when Firefox exits; regular users should install a Mozilla-signed package. Google Chrome for Android and the native YouTube app are not supported.
 
 ## Usage
+
+**0.3.7 incremental subtitles and economy mode**: Sentence segmentation now processes small windows near the current playback position first. Each completed window can translate immediately. The default economy mode translates only captions overlapping the current position and the next 2 minutes. Under **Settings → General → Subtitle translation scope**, choose full-video translation or configure a 1/2/3-minute lookahead. Full-video mode also starts near playback before working through the rest.
+
+Seeking, reducing lookahead, or disabling subtitles adjusts unsent work. Already-sent requests may still incur charges and are allowed to finish and cache their results. Segmentation favors sentence endings and may include a small amount of context outside the translation horizon at window boundaries. Both prepared windows and remaining source captions are saved, so refresh can resume partial progress. Changing scope or lookahead preserves the cache; older complete snapshots remain readable. Reload the extension and refresh the video after updating; no cache clearing is needed. Actual first-caption latency still depends on caption retrieval and provider response times.
 
 **0.3.6 webpage formatting**: New translations preserve common inline formatting, including code, bold, italics, links, subscripts, superscripts and line breaks. Identifiers such as `readAsString()` and `readAsLines()` retain the source code appearance. Existing plain-text cache entries remain reusable: unchanged code literals are styled locally without another API call, although translated emphasis and link text in old entries cannot be reliably aligned. Missing or malformed model formatting markers fall back to plain text with code styling where possible. Reload the extension, refresh the page and click translate after updating; there is no need to clear the cache.
 

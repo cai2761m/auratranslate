@@ -19,7 +19,7 @@ test("font scale accepts smaller mobile sizes, finer steps, and larger sizes", (
 
 async function optionsPage(storage) {
   const elements = new Map();
-  for (const id of ["settings-form", "fontScale", "fontScaleValue", "status"]) {
+  for (const id of ["settings-form", "fontScale", "fontScaleValue", "status", "subtitleTranslationMode", "subtitleLookAheadMinutes"]) {
     elements.set(`#${id}`, {
       value: "", textContent: "", listeners: {},
       addEventListener(type, callback) { this.listeners[type] = callback; }
@@ -66,4 +66,21 @@ test("HTML slider bounds match shared validation and its hint is accessible", ()
   }
   assert.match(input, /aria-describedby="fontScaleHint"/);
   assert.match(html, /id="fontScaleHint"/);
+});
+
+test("subtitle scope and lookahead settings save and reload", async () => {
+  const storage = {};
+  const page = await optionsPage(storage);
+  assert.equal(page.subtitleTranslationMode.value, "economy");
+  assert.equal(page.subtitleLookAheadMinutes.value, "2");
+  for (const mode of ["full", "economy"]) {
+    for (const minutes of [1, 2, 3]) {
+      page.subtitleTranslationMode.value = mode;
+      page.subtitleLookAheadMinutes.value = String(minutes);
+      await page["settings-form"].listeners.submit({ preventDefault() {} });
+      const reopened = await optionsPage(storage);
+      assert.equal(reopened.subtitleTranslationMode.value, mode);
+      assert.equal(reopened.subtitleLookAheadMinutes.value, String(minutes));
+    }
+  }
 });

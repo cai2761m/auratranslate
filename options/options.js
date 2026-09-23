@@ -14,6 +14,8 @@
   const fontScale = document.querySelector("#fontScale");
   const fontScaleValue = document.querySelector("#fontScaleValue");
   const subtitleEnabled = document.querySelector("#subtitleEnabled");
+  const subtitleTranslationMode = document.querySelector("#subtitleTranslationMode");
+  const subtitleLookAheadMinutes = document.querySelector("#subtitleLookAheadMinutes");
   const status = document.querySelector("#status");
   const clearCache = document.querySelector("#clear-cache");
 
@@ -52,6 +54,8 @@
     if (subtitleEnabled) {
       subtitleEnabled.checked = settings.subtitleEnabled !== false;
     }
+    if (subtitleTranslationMode) subtitleTranslationMode.value = settings.subtitleTranslationMode === "full" ? "full" : "economy";
+    if (subtitleLookAheadMinutes) subtitleLookAheadMinutes.value = String(settings.subtitleLookAheadMinutes || 2);
 
     updateFontScaleLabel();
     bindApiFieldEvents(realtimeApi);
@@ -152,7 +156,9 @@
       sourceLanguage: readValue(sourceLanguage, Core.DEFAULT_SETTINGS.sourceLanguage),
       targetLanguage: readValue(targetLanguage, Core.DEFAULT_SETTINGS.targetLanguage),
       fontScale: Core.normalizeFontScale(readValue(fontScale, Core.DEFAULT_SETTINGS.fontScale)),
-      subtitleEnabled: readChecked(subtitleEnabled, true)
+      subtitleEnabled: readChecked(subtitleEnabled, true),
+      subtitleTranslationMode: readValue(subtitleTranslationMode, "economy") === "full" ? "full" : "economy",
+      subtitleLookAheadMinutes: Number(readValue(subtitleLookAheadMinutes, "2"))
     });
     showStatus("设置已保存。");
   }

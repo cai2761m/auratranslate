@@ -17,6 +17,8 @@
     sourceLanguage: "en",
     fontScale: 1,
     subtitleEnabled: true,
+    subtitleTranslationMode: "economy",
+    subtitleLookAheadMinutes: 2,
     subtitlePosition: null,
     llmSentenceSegmentationEnabled: true,
     asrCorrectionEnabled: true,

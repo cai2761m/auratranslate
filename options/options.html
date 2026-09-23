@@ -128,6 +128,26 @@
                 <p>控制语言、LLM 智能断句、专业术语、字幕大小、ASR 纠错和字幕开关。</p>
               </div>
 
+              <div class="grid">
+                <label class="field">
+                  <span>字幕翻译范围</span>
+                  <select id="subtitleTranslationMode">
+                    <option value="economy">省 token 模式（默认）</option>
+                    <option value="full">翻译整部视频</option>
+                  </select>
+                  <small>省 token 模式只处理播放位置附近的字幕；整片模式优先处理附近，再继续翻译其余部分。切换模式复用已有缓存。</small>
+                </label>
+                <label class="field">
+                  <span>省 token 模式预翻译时长</span>
+                  <select id="subtitleLookAheadMinutes">
+                    <option value="1">未来 1 分钟</option>
+                    <option value="2">未来 2 分钟（默认）</option>
+                    <option value="3">未来 3 分钟</option>
+                  </select>
+                  <small>随播放向前补充；跳转后调整待处理任务。已发出的请求仍会完成并缓存。</small>
+                </label>
+              </div>
+
               <label class="toggle">
                 <input id="llmSentenceSegmentationEnabled" type="checkbox">
                 <span>启用 LLM 智能断句，先合并跨字幕的完整句子再翻译（默认开启）</span>

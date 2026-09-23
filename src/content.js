@@ -55,6 +55,8 @@
     trackFingerprint: "",
     translationTrackFingerprint: "",
     cues: [],
+    preparationPromise: null,
+    preparationBlocked: false,
     queue: [],
     inFlight: new Map(),
     batchSerial: 0,
@@ -157,6 +159,9 @@
     const merged = Object.assign({}, Core.DEFAULT_SETTINGS, settings || {});
     merged.fontScale = Core.normalizeFontScale(merged.fontScale);
     merged.subtitleEnabled = merged.subtitleEnabled !== false;
+    merged.subtitleTranslationMode = merged.subtitleTranslationMode === "full" ? "full" : "economy";
+    merged.subtitleLookAheadMinutes = [1, 2, 3].includes(Number(merged.subtitleLookAheadMinutes))
+      ? Number(merged.subtitleLookAheadMinutes) : 2;
     merged.llmSentenceSegmentationEnabled = merged.llmSentenceSegmentationEnabled !== false;
     merged.showOriginalTechnicalTerms = merged.showOriginalTechnicalTerms !== false;
     merged.targetLanguage = merged.targetLanguage || Core.DEFAULT_SETTINGS.targetLanguage;
@@ -236,6 +241,11 @@
           handlePlayerResponse(playerResponse);
         }
         return;
+      }
+
+      if (changes.subtitleTranslationMode || changes.subtitleLookAheadMinutes || changes.subtitleEnabled) {
+        state.queue = [];
+        scheduleTranslations(getCurrentTimeMs(), true);
       }
 
       if (
@@ -562,6 +572,8 @@
     state.captionLoadKey = "";
     state.captionLoadPromise = null;
     state.cues = [];
+    state.preparationPromise = null;
+    state.preparationBlocked = false;
     state.queue = [];
     state.inFlight.clear();
     state.statusText = "";
@@ -686,14 +698,15 @@
   }
 
   function validPreparedCaptionCache(value, videoId) {
-    if (!value || value.version !== 1 || value.videoId !== videoId ||
+    if (!value || ![1, 2].includes(value.version) || value.videoId !== videoId ||
         !value.trackFingerprint || !Array.isArray(value.cues) || !value.cues.length) return false;
     const ids = new Set();
     return value.cues.every((cue, index) => {
       if (!cue || cue.id == null || !String(cue.id) || ids.has(String(cue.id)) ||
           !Number.isFinite(cue.startMs) || !Number.isFinite(cue.endMs) || cue.startMs < 0 ||
           cue.endMs <= cue.startMs || typeof cue.sourceText !== "string" || !Core.normalizeSubtitleText(cue.sourceText) ||
-          (index > 0 && cue.startMs < value.cues[index - 1].startMs)) return false;
+          (index > 0 && cue.startMs < value.cues[index - 1].startMs) ||
+          (cue.pendingWindow != null && (value.version !== 2 || !/^w:\d+$/.test(cue.pendingWindow)))) return false;
       ids.add(String(cue.id));
       return true;
     });
@@ -715,10 +728,11 @@
   async function persistPreparedCaptionCues(cues, videoId, trackFingerprint, token) {
     const key = preparedCaptionCacheKey(videoId, trackFingerprint);
     const value = {
-      version: 1, videoId, trackFingerprint, updatedAt: Date.now(),
+      version: 2, videoId, trackFingerprint: state.translationTrackFingerprint || trackFingerprint, updatedAt: Date.now(),
       cues: cues.map((cue) => ({
         id: String(cue.id), startMs: cue.startMs, endMs: cue.endMs,
-        sourceText: cue.sourceText, displaySourceText: cue.displaySourceText || ""
+        sourceText: cue.sourceText, displaySourceText: cue.displaySourceText || "",
+        ...(cue.pendingWindow ? { pendingWindow: cue.pendingWindow } : {})
       }))
     };
     const all = await storageGet(null);
@@ -743,23 +757,31 @@
     }
   }
 
-  async function activateCaptionCues(cues, videoId, trackFingerprint, token, fallbackMessage) {
+  async function hydrateCaptionTranslations(cues, videoId, trackFingerprint, token) {
     // Read every existing translation before publishing cues to the scheduler.
     // This read-only request must never start a paid API call.
     const response = await sendMessage({
       type: "TRANSLATE_BATCH", cacheOnly: true, videoId,
       trackFingerprint: state.translationTrackFingerprint || trackFingerprint,
-      cues: cues.map((cue) => ({ id: cue.id, sourceText: cue.sourceText }))
+      cues: cues.filter((cue) => !cue.pendingWindow).map((cue) => ({ id: cue.id, sourceText: cue.sourceText }))
     });
     if (!isCurrentCaptionLoad(videoId, trackFingerprint, token)) return;
     if (!response || response.ok === false) {
       const error = response && response.errors && response.errors[0];
       throw new Error(`读取本地翻译缓存失败，已暂停翻译：${error && error.message || "后台无响应"}`);
     }
-    const prepared = cues.map((cue) => Object.assign({}, cue, { status: "pending", translatedText: "" }));
+    const prepared = cues.map((cue) => Object.assign({}, cue, {
+      status: cue.pendingWindow ? "unprepared" : "pending", translatedText: ""
+    }));
     const items = response.items || [];
     const cachedIds = new Set(items.filter((item) => item && item.translatedText).map((item) => String(item.id)));
     applyTranslations({ cues: prepared.filter((cue) => cachedIds.has(String(cue.id))) }, items);
+    return prepared;
+  }
+
+  async function activateCaptionCues(cues, videoId, trackFingerprint, token, fallbackMessage) {
+    const prepared = await hydrateCaptionTranslations(cues, videoId, trackFingerprint, token);
+    if (!prepared || !isCurrentCaptionLoad(videoId, trackFingerprint, token)) return;
     state.cues = prepared;
     if (fallbackMessage) {
       setStatus(`LLM 智能断句失败，已回退本地断句：${fallbackMessage}`);
@@ -786,53 +808,105 @@
       return;
     }
 
-    let preparedCues = merged;
-    let segmentationFallbackMessage = "";
-    if (state.settings.llmSentenceSegmentationEnabled && hasApiKey()) {
-      const segmentationInput = Core.splitCaptionCuesAtSentenceBoundaries(merged);
-      setStatus(`正在使用 LLM 智能断句 0/${segmentationInput.length}...`);
-      try {
-        const response = await sendMessage(
-          {
-            type: "SEGMENT_SUBTITLES",
-            videoId,
-            trackFingerprint,
-            cues: segmentationInput.map((cue) => ({
-              id: cue.id,
-              startMs: cue.startMs,
-              endMs: cue.endMs,
-              sourceText: cue.sourceText
-            }))
-          },
-          SEGMENTATION_MESSAGE_TIMEOUT_MS
-        );
-        if (!response || response.ok === false) {
-          const error = response && response.errors && response.errors[0];
-          throw new Error(error && error.message ? error.message : "LLM 智能断句失败");
-        }
-        preparedCues = Core.applySentenceSegmentationGroups(
-          segmentationInput,
-          response.groups || []
-        );
-      } catch (error) {
-        segmentationFallbackMessage = simplifyTranslationError(error && error.message ? error.message : error);
-        preparedCues = merged;
-      }
-    }
-
-    if (
-      token !== state.loadingToken ||
-      videoId !== state.videoId ||
-      trackFingerprint !== state.trackFingerprint
-    ) {
-      return;
-    }
-
-    if (!state.settings.llmSentenceSegmentationEnabled || hasApiKey()) {
-      await persistPreparedCaptionCues(preparedCues, videoId, trackFingerprint, token);
-    }
+    const preparedCues = state.settings.llmSentenceSegmentationEnabled
+      ? makeIncrementalCaptionCues(Core.splitCaptionCuesAtSentenceBoundaries(merged)) : merged;
+    // Persist the raw remainder too: refresh can resume without fetching the
+    // track again, while completed windows retain their exact cue identities.
+    await persistPreparedCaptionCues(preparedCues, videoId, trackFingerprint, token);
     if (!isCurrentCaptionLoad(videoId, trackFingerprint, token)) return;
-    await activateCaptionCues(preparedCues, videoId, trackFingerprint, token, segmentationFallbackMessage);
+    await activateCaptionCues(preparedCues, videoId, trackFingerprint, token);
+  }
+
+  function makeIncrementalCaptionCues(cues) {
+    let windowIndex = 0;
+    let startIndex = 0;
+    return cues.map((cue, index) => {
+      const result = { ...cue, id: `raw:${cue.id}`, pendingWindow: `w:${windowIndex}` };
+      const count = index - startIndex + 1;
+      const duration = cue.endMs - cues[startIndex].startMs;
+      const next = cues[index + 1];
+      const naturalBoundary = /[.!?。！？]["')\]]*$/.test(cue.sourceText) ||
+        (next && next.startMs - cue.endMs > 1500);
+      // Prefer sentence endings; cap pathological unpunctuated tracks so the
+      // first provider request stays small. Boundaries never depend on seeks.
+      if (((duration >= 20000 || count >= 8) && naturalBoundary) || duration >= 40000 || count >= 16) {
+        windowIndex += 1;
+        startIndex = index + 1;
+      }
+      return result;
+    });
+  }
+
+  function shouldPrepareWindow(cues, anchorMs) {
+    return cues.some((cue) => isCueInTranslationWindow(cue, anchorMs));
+  }
+
+  function ensureCaptionPreparation() {
+    if (state.preparationPromise || state.preparationBlocked || !state.settings.subtitleEnabled || !hasApiKey()) {
+      return state.preparationPromise;
+    }
+    const { videoId, trackFingerprint, loadingToken: token } = state;
+    const work = (async () => {
+      while (isCurrentCaptionLoad(videoId, trackFingerprint, token) && state.settings.subtitleEnabled && !isInApiBackoff()) {
+        const windows = new Map();
+        for (const cue of state.cues) {
+          if (!cue.pendingWindow) continue;
+          if (!windows.has(cue.pendingWindow)) windows.set(cue.pendingWindow, []);
+          windows.get(cue.pendingWindow).push(cue);
+        }
+        const anchorMs = getCurrentTimeMs();
+        const eligible = [...windows.values()].filter((cues) => shouldPrepareWindow(cues, anchorMs));
+        eligible.sort((a, b) => Math.min(...a.map((cue) => priorityScore(cue, anchorMs))) -
+          Math.min(...b.map((cue) => priorityScore(cue, anchorMs))));
+        const input = eligible[0];
+        if (!input) break;
+        const windowId = input[0].pendingWindow;
+        let prepared;
+        try {
+          const response = await sendMessage({
+            type: "SEGMENT_SUBTITLES", videoId,
+            trackFingerprint: state.translationTrackFingerprint || trackFingerprint,
+            cues: input.map(({ id, startMs, endMs, sourceText }) => ({ id, startMs, endMs, sourceText }))
+          }, SEGMENTATION_MESSAGE_TIMEOUT_MS);
+          if (!response || response.ok === false) {
+            throw new Error(response && response.errors && response.errors[0] && response.errors[0].message || "LLM 智能断句失败");
+          }
+          prepared = Core.applySentenceSegmentationGroups(input, response.groups || []);
+        } catch (error) {
+          if (!isCurrentCaptionLoad(videoId, trackFingerprint, token)) return;
+          // Storage errors must never turn into new paid translation work.
+          if (/cache|storage|缓存|保存|quota|QUOTA_BYTES/i.test(error.message)) throw error;
+          if (Core.classifyTranslationError(error.message) === "fatal") throw error;
+          const backoffMs = apiBackoffMsForError(error.message);
+          if (backoffMs) applyApiBackoff(error.message, backoffMs);
+          // A failed window falls back once, without replaying an ambiguous
+          // segmentation request. Other windows remain eligible for later work.
+          prepared = input.map(({ pendingWindow, ...cue }) => cue);
+          setStatus(`当前片段智能断句失败，使用本地断句：${simplifyTranslationError(error.message)}`);
+        }
+        if (!isCurrentCaptionLoad(videoId, trackFingerprint, token)) return;
+        prepared = prepared.map((cue, index) => ({ ...cue, id: `${windowId}:${index}` }));
+        const nextCues = state.cues.filter((cue) => cue.pendingWindow !== windowId).concat(prepared)
+          .sort((a, b) => a.startMs - b.startMs);
+        await persistPreparedCaptionCues(nextCues, videoId, trackFingerprint, token);
+        const hydrated = await hydrateCaptionTranslations(prepared, videoId, trackFingerprint, token);
+        if (!hydrated || !isCurrentCaptionLoad(videoId, trackFingerprint, token)) return;
+        // Keep existing cue objects: translation responses may have arrived
+        // while the next window was being segmented or saved.
+        state.cues = state.cues.filter((cue) => cue.pendingWindow !== windowId).concat(hydrated)
+          .sort((a, b) => a.startMs - b.startMs);
+        scheduleTranslations(getCurrentTimeMs(), true);
+      }
+    })().catch((error) => {
+      if (!isCurrentCaptionLoad(videoId, trackFingerprint, token)) return;
+      state.preparationBlocked = true;
+      state.queue = [];
+      setStatus(`字幕准备失败，已暂停新请求：${error.message || error}`);
+    }).finally(() => {
+      if (state.preparationPromise === work) state.preparationPromise = null;
+    });
+    state.preparationPromise = work;
+    return work;
   }
 
   async function fetchCaptionData(track, videoId, transcript) {
@@ -1330,7 +1404,7 @@
   }
 
   function scheduleTranslations(anchorMs, resetQueue) {
-    if (!state.settings.subtitleEnabled || !state.cues.length) {
+    if (!state.settings.subtitleEnabled || !state.cues.length || state.preparationBlocked) {
       return;
     }
 
@@ -1339,7 +1413,8 @@
       return;
     }
 
-    if (resetQueue) {
+    ensureCaptionPreparation();
+    if (resetQueue || state.settings.subtitleTranslationMode !== "full") {
       state.queue = [];
     }
 
@@ -1356,7 +1431,7 @@
     }
 
     const pending = state.cues
-      .filter((cue) => cue.status === "pending" && !alreadyQueued.has(cue.id))
+      .filter((cue) => cue.status === "pending" && !alreadyQueued.has(cue.id) && isCueInTranslationWindow(cue, anchorMs))
       .sort((left, right) => priorityScore(left, anchorMs) - priorityScore(right, anchorMs));
 
     const batchSize = currentBatchSize();
@@ -1365,6 +1440,13 @@
     }
 
     pumpQueue();
+  }
+
+  function isCueInTranslationWindow(cue, anchorMs) {
+    if (state.settings.subtitleTranslationMode === "full") return true;
+    const minutes = [1, 2, 3].includes(Number(state.settings.subtitleLookAheadMinutes))
+      ? Number(state.settings.subtitleLookAheadMinutes) : 2;
+    return cue.endMs > anchorMs && cue.startMs < anchorMs + minutes * 60000;
   }
 
   function priorityScore(cue, anchorMs) {
@@ -1378,7 +1460,7 @@
   }
 
   function pumpQueue() {
-    if (state.pumping || !state.settings.subtitleEnabled || !hasApiKey()) {
+    if (state.pumping || state.preparationBlocked || !state.settings.subtitleEnabled || !hasApiKey()) {
       return;
     }
 
@@ -1392,7 +1474,7 @@
     try {
       while (state.inFlight.size < currentMaxParallelBatches() && state.queue.length) {
         const queued = state.queue.shift();
-        const cues = queued.cues.filter((cue) => cue.status === "pending");
+        const cues = queued.cues.filter((cue) => cue.status === "pending" && isCueInTranslationWindow(cue, getCurrentTimeMs()));
         if (!cues.length) {
           continue;
         }
@@ -1646,7 +1728,7 @@
       state.apiBackoffUntil = 0;
       state.apiBackoffMessage = "";
       updateProgressStatus();
-      pumpQueue();
+      scheduleTranslations(getCurrentTimeMs(), true);
     }, Math.min(remainingMs, 60000));
   }
 
@@ -1680,7 +1762,7 @@
   }
 
   function updateProgressStatus() {
-    if (!state.cues.length) {
+    if (!state.cues.length || state.preparationBlocked) {
       return;
     }
 
@@ -1697,6 +1779,9 @@
       setStatus(`部分字幕翻译失败，已完成 ${done}/${total}，失败 ${failed}${detail}`);
     } else if (translating) {
       setStatus(`正在翻译字幕 ${done}/${total}（${translating} 条处理中）...`);
+    } else if (state.settings.subtitleTranslationMode !== "full" &&
+        !state.cues.some((cue) => cue.status !== "translated" && isCueInTranslationWindow(cue, getCurrentTimeMs()))) {
+      setStatus(`省 token 模式：附近字幕已就绪，随播放继续翻译（已完成 ${done} 条）。`);
     } else {
       setStatus(`正在预翻译字幕 ${done}/${total}...`);
     }
@@ -2502,7 +2587,7 @@
       parts.cn.textContent = cue.translatedText || fallbackTextForCue(cue);
       parts.en.textContent = cue.displaySourceText || cue.sourceText || "";
 
-      if (cue.status === "pending" && Date.now() - state.lastUrgentScheduleAt > URGENT_RESCHEDULE_MS) {
+      if ((cue.status === "pending" || cue.status === "unprepared") && Date.now() - state.lastUrgentScheduleAt > URGENT_RESCHEDULE_MS) {
         state.lastUrgentScheduleAt = Date.now();
         scheduleTranslations(timeMs, true);
       }
@@ -2521,6 +2606,8 @@
     if (cue.status === "failed") {
       return formatCueFailureText(cue.lastError);
     }
+    if (state.preparationBlocked) return state.statusText;
+    if (cue.status === "unprepared") return "正在准备当前片段字幕...";
     return "翻译中...";
   }
 
