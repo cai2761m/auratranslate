@@ -93,23 +93,26 @@
     const isImmersive = profile === "immersive";
     const config = Core.resolveTranslationConfig(settings, isImmersive ? "immersive" : undefined);
 
-    fields.provider.value = isImmersive
-      ? settings.immersiveTranslationProvider || ""
-      : config.provider;
+    const inheritsRealtime = isImmersive && !settings.immersiveTranslationProvider;
+    fields.provider.value = inheritsRealtime ? "" : "custom";
     fields.apiKey.value = isImmersive
       ? settings.immersiveTranslationApiKey || ""
       : settings.translationApiKey || settings.deepseekApiKey || "";
-    fields.baseUrl.value = isImmersive
-      ? settings.immersiveTranslationBaseUrl || ""
-      : settings.translationBaseUrl || config.baseUrl || "";
-    fields.model.value = isImmersive
-      ? settings.immersiveTranslationModel || ""
-      : settings.translationModel || config.model || "";
+    fields.baseUrl.value = inheritsRealtime ? "" : compatibleBaseUrl(config);
+    fields.model.value = inheritsRealtime ? "" : config.model;
     fields.jsonResponse.checked = isImmersive
       ? settings.immersiveTranslationJsonResponse !== false
       : settings.translationJsonResponse !== false;
 
     updateProviderPlaceholders(fields);
+  }
+
+  function compatibleBaseUrl(config) {
+    if (config.provider !== "gemini") return config.baseUrl;
+    // Preserve legacy Gemini credentials while switching the settings form to
+    // Google's OpenAI-compatible endpoint instead of its native protocol.
+    const baseUrl = config.baseUrl.replace(/\/+$/, "").replace(/\/(?:models|tunedModels)\/[^/]+:generateContent$/i, "");
+    return /\/openai$/i.test(baseUrl) ? baseUrl : `${baseUrl}/openai`;
   }
 
   function bindApiFieldEvents(fields) {
@@ -139,12 +142,12 @@
     const useDedicatedImmersiveApi = Boolean(immersive.provider);
 
     await storageSet({
-      translationProvider: realtime.provider || "deepseek",
+      translationProvider: "custom",
       translationApiKey: realtime.apiKey,
       translationBaseUrl: realtime.baseUrl,
       translationModel: realtime.model,
       translationJsonResponse: realtime.jsonResponse,
-      deepseekApiKey: realtime.provider === "deepseek" ? realtime.apiKey : "",
+      deepseekApiKey: "",
       immersiveTranslationProvider: immersive.provider,
       immersiveTranslationApiKey: useDedicatedImmersiveApi ? immersive.apiKey : "",
       immersiveTranslationBaseUrl: useDedicatedImmersiveApi ? immersive.baseUrl : "",
@@ -166,7 +169,7 @@
   function readApiFields(fields) {
     if (!fields.provider) {
       return {
-        provider: "deepseek",
+        provider: "custom",
         apiKey: "",
         baseUrl: "",
         model: "",
@@ -218,18 +221,6 @@
       fields.apiKey.value = "";
       fields.baseUrl.value = "";
       fields.model.value = "";
-    } else if (fields.provider.value === "deepseek") {
-      fields.baseUrl.value = Core.DEEPSEEK_BASE_URL;
-      fields.model.value = Core.DEEPSEEK_MODEL;
-    } else if (fields.provider.value === "gemini") {
-      fields.baseUrl.value = Core.GEMINI_BASE_URL;
-      fields.model.value = Core.GEMINI_MODEL;
-    } else if (fields.baseUrl.value.trim() === Core.DEEPSEEK_BASE_URL) {
-      fields.baseUrl.value = "";
-      fields.model.value = "";
-    } else if (fields.baseUrl.value.trim() === Core.GEMINI_BASE_URL) {
-      fields.baseUrl.value = "";
-      fields.model.value = "";
     }
     updateProviderPlaceholders(fields);
   }
@@ -239,14 +230,6 @@
       fields.apiKey.placeholder = "沿用实时字幕 API Key";
       fields.baseUrl.placeholder = "沿用实时字幕 Base URL";
       fields.model.placeholder = "沿用实时字幕模型";
-    } else if (fields.provider.value === "deepseek") {
-      fields.apiKey.placeholder = "sk-...";
-      fields.baseUrl.placeholder = Core.DEEPSEEK_BASE_URL;
-      fields.model.placeholder = Core.DEEPSEEK_MODEL;
-    } else if (fields.provider.value === "gemini") {
-      fields.apiKey.placeholder = "AIza...";
-      fields.baseUrl.placeholder = Core.GEMINI_BASE_URL;
-      fields.model.placeholder = Core.GEMINI_MODEL;
     } else {
       fields.apiKey.placeholder = "sk-...";
       fields.baseUrl.placeholder = "https://api.example.com/v1";

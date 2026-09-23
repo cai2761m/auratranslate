@@ -102,8 +102,7 @@ p {
   min-width: 0;
 }
 
-.panel,
-.notes {
+.panel {
   border: 1px solid #d8dee9;
   border-radius: 8px;
   background: #fff;
@@ -133,11 +132,6 @@ p {
   border-radius: 7px;
   background: #f8fafc;
   color: #475569;
-}
-
-.notes {
-  scroll-margin-top: 24px;
-  margin-top: 16px;
 }
 
 .field {
@@ -261,8 +255,7 @@ button.secondary:hover {
     gap: 0;
   }
 
-  .panel,
-  .notes {
+  .panel {
     padding: 16px;
   }
 }

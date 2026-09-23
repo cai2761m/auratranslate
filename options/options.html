@@ -31,10 +31,6 @@
               <span class="sidebar-title">通用设置</span>
               <span class="sidebar-desc">语言、字幕与缓存</span>
             </a>
-            <a href="#usage-notes" class="sidebar-link">
-              <span class="sidebar-title">使用说明</span>
-              <span class="sidebar-desc">服务商与兼容性</span>
-            </a>
           </nav>
         </aside>
 
@@ -50,9 +46,7 @@
               <label class="field">
                 <span>翻译服务</span>
                 <select id="translationProvider">
-                  <option value="deepseek">DeepSeek</option>
-                  <option value="gemini">Gemini</option>
-                  <option value="custom">自定义 OpenAI-compatible API</option>
+                  <option value="custom">OpenAI-compatible API</option>
                 </select>
               </label>
 
@@ -64,12 +58,12 @@
               <div class="grid">
                 <label class="field">
                   <span>Base URL</span>
-                  <input id="translationBaseUrl" type="url" autocomplete="off" placeholder="https://api.deepseek.com">
+                  <input id="translationBaseUrl" type="url" autocomplete="off" placeholder="https://api.example.com/v1">
                 </label>
 
                 <label class="field">
                   <span>模型</span>
-                  <input id="translationModel" type="text" autocomplete="off" placeholder="deepseek-v4-flash">
+                  <input id="translationModel" type="text" autocomplete="off" placeholder="model-name">
                 </label>
               </div>
 
@@ -86,15 +80,13 @@
                 <p>用于普通网页右侧小圆球触发的中英对照翻译。</p>
               </div>
 
-              <p class="section-note">默认沿用实时字幕 API；选择服务商后可单独配置沉浸式翻译调用的 API。</p>
+              <p class="section-note">默认沿用实时字幕 API；选择 OpenAI-compatible API 后可单独配置沉浸式翻译调用的 API。</p>
 
               <label class="field">
                 <span>翻译服务</span>
                 <select id="immersiveTranslationProvider">
                   <option value="">沿用实时字幕 API</option>
-                  <option value="deepseek">DeepSeek</option>
-                  <option value="gemini">Gemini</option>
-                  <option value="custom">自定义 OpenAI-compatible API</option>
+                  <option value="custom">OpenAI-compatible API</option>
                 </select>
               </label>
 
@@ -200,10 +192,6 @@
             <p id="status" class="status" role="status"></p>
           </form>
 
-          <section id="usage-notes" class="notes">
-            <h2>使用说明</h2>
-            <p>DeepSeek 可直接使用默认 Base URL 和模型。Gemini 会自动使用 Gemini API 地址。自定义服务商需兼容 OpenAI Chat Completions。</p>
-          </section>
         </div>
       </div>
     </main>
