@@ -27,6 +27,7 @@ async function translatePage(t, html, options = {}) {
     runtime: {},
     storage: { local: { get: (defaults, callback) => callback(defaults), set: (_, callback) => callback() } }
   };
+  options.setup?.(window);
   window.eval(sharedScript);
   window.YTBTCore = {
     ...window.YTBTCore,
@@ -149,6 +150,128 @@ function paragraphs(count) {
   return `<main>${Array.from({ length: count }, (_, index) =>
     `<p data-index="${index}">This is readable paragraph number ${index}.</p>`).join("")}</main>`;
 }
+
+function cachePollClock(window) {
+  const timers = new Map();
+  let serial = 100000;
+  const set = window.setTimeout.bind(window);
+  const clear = window.clearTimeout.bind(window);
+  window.setTimeout = (callback, ms, ...args) => {
+    if (ms !== 5000) return set(callback, ms, ...args);
+    const id = ++serial;
+    timers.set(id, callback);
+    return id;
+  };
+  window.clearTimeout = (id) => {
+    if (!timers.delete(id)) clear(id);
+  };
+  return {
+    timers,
+    async tick() {
+      const due = [...timers.values()];
+      timers.clear();
+      due.forEach((callback) => callback());
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  };
+}
+
+test("stuck paid response channels finish from cache probes and ignore late errors", async (t) => {
+  let clock;
+  let ready = false;
+  const rejectPaid = [];
+  const { requests } = await translatePage(t, paragraphs(8), {
+    setup(window) { clock = cachePollClock(window); },
+    sendMessage(message) {
+      if (message.cacheOnly) return ready ? translatedResponse(message) : { ok: true, items: [] };
+      return new Promise((_, reject) => rejectPaid.push(reject));
+    },
+    async afterStart({ window }) {
+      await waitUntil(() => rejectPaid.length === 2);
+      await clock.tick();
+      assert.equal(clock.timers.size, 2, "incomplete cache must not finish paid work");
+      ready = true;
+      await clock.tick();
+      await waitUntil(() => window.document.querySelector(".ytbt-immersive-tab").dataset.ytbtState === "done");
+      rejectPaid.forEach((reject) => reject(new Error("Translation request timeout: background did not respond.")));
+      await clock.tick();
+      assert.equal(clock.timers.size, 0);
+      assert.equal(window.document.querySelectorAll("[data-ytbt-immersive-translation][data-ytbt-state='done']").length, 8);
+    }
+  });
+  assert.equal(requests.filter((message) => !message.cacheOnly).length, 2);
+});
+
+test("foreground timeout recovery polls late results without tab switches or paid replays", async (t) => {
+  let clock;
+  let ready = false;
+  const { requests } = await translatePage(t, paragraphs(8), {
+    setup(window) { clock = cachePollClock(window); },
+    sendMessage(message) {
+      if (message.cacheOnly) return ready ? translatedResponse(message) : { ok: true, items: [] };
+      throw new Error("Translation request timeout: background did not respond.");
+    },
+    async afterStart({ window }) {
+      await waitUntil(() => clock.timers.size === 1);
+      await clock.tick();
+      assert.equal(window.document.querySelectorAll("[data-ytbt-state='waiting']").length, 8);
+      ready = true;
+      await clock.tick();
+      await waitUntil(() => window.document.querySelector(".ytbt-immersive-tab").dataset.ytbtState === "done");
+      assert.equal(clock.timers.size, 0);
+    }
+  });
+  assert.equal(requests.filter((message) => !message.cacheOnly).length, 2);
+});
+
+test("unrecoverable timeouts stop background polling after a bounded recovery window", async (t) => {
+  let clock;
+  const { requests } = await translatePage(t, paragraphs(8), {
+    expectedState: "error",
+    setup(window) { clock = cachePollClock(window); },
+    sendMessage(message) {
+      if (message.cacheOnly) return { ok: true, items: [] };
+      throw new Error("The message port closed before a response was received.");
+    },
+    async afterStart() {
+      await waitUntil(() => clock.timers.size === 1);
+      for (let i = 0; i < 12; i++) await clock.tick();
+      assert.equal(clock.timers.size, 0, "idle pages must not poll forever");
+    }
+  });
+  assert.equal(requests.filter((message) => !message.cacheOnly).length, 2);
+  assert.equal(requests.filter((message) => message.cacheOnly).length, 13);
+});
+
+test("cache progress probes never overlap and stop after navigation", async (t) => {
+  let clock;
+  let resolveProbe;
+  let resolvePaid;
+  const { requests, document } = await translatePage(t, paragraphs(4), {
+    expectedState: "idle",
+    setup(window) { clock = cachePollClock(window); },
+    sendMessage(message) {
+      if (!message.cacheOnly) return new Promise((resolve) => { resolvePaid = () => resolve(translatedResponse(message)); });
+      if (!resolvePaid) return { ok: true, items: [] };
+      return new Promise((resolve) => { resolveProbe = () => resolve(translatedResponse(message)); });
+    },
+    async afterStart({ window }) {
+      await waitUntil(() => resolvePaid);
+      await clock.tick();
+      assert.ok(resolveProbe);
+      await clock.tick();
+      assert.equal(clock.timers.size, 0, "wait for a slow probe before scheduling another");
+      window.history.pushState({}, "", "/different-page");
+      window.dispatchEvent(new window.Event("popstate"));
+      resolveProbe();
+      resolvePaid();
+      await clock.tick();
+      assert.equal(clock.timers.size, 0);
+    }
+  });
+  assert.equal(requests.length, 3);
+  assert.equal(document.querySelectorAll("[data-ytbt-immersive-translation]").length, 0);
+});
 
 test("page scheduler prioritizes viewport, reorders after scrolling and renders out of order with at most three requests", async (t) => {
   let focusedIndex = 24;

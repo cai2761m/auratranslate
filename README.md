@@ -87,7 +87,7 @@ Successful subtitle translations, prepared caption windows, and webpage translat
 - Changing the model, endpoint, language, or relevant subtitle processing settings can require new translations. Switching subtitle scope or lookahead preserves cached progress.
 - Seeking or disabling subtitles adjusts work that has not yet been sent. Already-sent requests may finish and incur charges.
 - Hidden webpage tabs pause new translation batches. Returning to the tab resumes pending work.
-- After an ambiguous timeout or closed message channel, webpage recovery checks the cache without automatically replaying uncertain paid requests. Completed translations remain visible; click the button to manually continue missing work when necessary.
+- While webpage requests are pending, read-only cache checks recover completed results even if the original response channel stalls. After an uncertain timeout or a closed channel, the visible page automatically checks for late results up to 12 times, five seconds apart, without replaying paid requests. Returning to the tab also checks the cache. Completed translations remain visible; click the button to manually continue missing work when necessary.
 - **清空翻译缓存** clears subtitle and webpage translation caches. Subsequent translation may call the API again. Cache size is limited, so older entries can be evicted.
 
 A refresh does not force the extension to fetch changed source captions when a prepared timeline is available. If a video's captions have been updated, clear the translation cache to read them again.
@@ -126,7 +126,7 @@ The current source does not include a separate AuraTranslate account service or 
 | API key / model error | Check the key, exact model ID, and Chat Completions base URL. Confirm the account can access that model. |
 | JSON output error | If the service rejects JSON response mode, disable it. If supported, enabling it can help the model return structured output. |
 | Translation is slow | First results depend on caption retrieval and API latency. Use economy mode with a shorter lookahead to reduce queued work. |
-| Timeout after changing tabs | Return to the page so cached results can recover. If work remains incomplete, manually continue with the translation button. Avoid clearing useful cache as the first step. |
+| Webpage translation timeout | Keep the page open for automatic cache recovery, or return to the tab. If work remains incomplete, manually continue with the translation button. After updating the source, reload the extension and refresh the page. No cache clearing is needed. |
 | Webpage content is skipped | Form controls, code blocks, decorative content, and explicitly excluded regions are skipped. Text in images, canvas, nested frames, or unsupported page structures may not be extracted. Each pass selects up to 240 text blocks. |
 | Extension stops working after an update | Reload the extension and refresh the affected tabs. |
 | Source captions changed but old text remains | Clear the translation cache in Settings, then refresh the video. |

@@ -239,6 +239,8 @@
   // Three 60s provider attempts plus up to 45s of retry backoff and persistence.
   const MESSAGE_TIMEOUT_MS = 240000;
   const CACHE_MESSAGE_TIMEOUT_MS = 15000;
+  const CACHE_POLL_INTERVAL_MS = 5000;
+  const MAX_RECOVERY_POLLS = 12;
   const DEFAULT_BALL_TOP_PCT = 50;
   const BALL_EDGE_PADDING_PX = 8;
   const BALL_DRAG_THRESHOLD_PX = 4;
@@ -254,6 +256,7 @@
     runToken: 0,
     pageUrl: pageIdentity(),
     recovery: null,
+    recoveryTimer: null,
     recovering: false,
     ballTopPct: DEFAULT_BALL_TOP_PCT,
     ballDrag: {
@@ -517,7 +520,7 @@
     if (state.pageUrl === url) return;
     state.pageUrl = url;
     state.runToken += 1;
-    state.recovery = null;
+    clearRecovery();
     state.translated = false;
     clearExistingTranslations();
     updateBallMode("idle");
@@ -550,10 +553,28 @@
     return /background did not respond|message (?:port|channel) closed|未返回结果|翻译接口响应超时/i.test(error && error.message || error);
   }
 
+  function clearRecovery() {
+    clearTimeout(state.recoveryTimer);
+    state.recoveryTimer = null;
+    state.recovery = null;
+  }
+
+  function scheduleRecovery(recovery) {
+    if (!recovery || recovery !== state.recovery || document.hidden || recovery.polls >= MAX_RECOVERY_POLLS) return;
+    // Unsent paragraphs cannot appear in the cache as a result of this run.
+    // Only keep polling while a delivered request may still complete.
+    if (!recovery.blocks.some((block) => block.element.isConnected && block.container.dataset.ytbtState === "waiting")) return;
+    clearTimeout(state.recoveryTimer);
+    state.recoveryTimer = setTimeout(recoverCachedTranslations, CACHE_POLL_INTERVAL_MS);
+  }
+
   async function recoverCachedTranslations() {
     const recovery = state.recovery;
     if (!recovery || state.recovering || document.hidden || !isCurrentRun(recovery.token, recovery.pageUrl)) return;
+    clearTimeout(state.recoveryTimer);
+    state.recoveryTimer = null;
     state.recovering = true;
+    recovery.polls += 1;
     try {
       const pending = recovery.blocks.filter((block) => block.element.isConnected && block.container.dataset.ytbtState !== "done");
       const items = await translateBatch(pending, true, recovery.pageUrl);
@@ -564,12 +585,13 @@
       }
       const remaining = recovery.blocks.filter((block) => block.element.isConnected && block.container.dataset.ytbtState !== "done").length;
       if (!remaining) {
-        state.recovery = null;
+        clearRecovery();
         state.translated = true;
         updateBallMode("done");
         showStatus("已从缓存恢复全部译文，没有重新请求翻译。");
       } else {
-        showStatus(`已保留完成的译文，还有 ${remaining} 段未完成。切回页面时会再次检查缓存；点击翻译按钮可手动继续。`, true);
+        const waiting = pending.some((block) => block.container.dataset.ytbtState === "waiting");
+        showStatus(`已保留完成的译文，还有 ${remaining} 段未完成。${waiting && recovery.polls < MAX_RECOVERY_POLLS ? "正在自动检查晚到的译文；" : ""}点击翻译按钮可手动继续。`, true);
       }
     } catch (_) {
       // A failed read must never become a paid retry. Keep recovery available
@@ -579,13 +601,14 @@
       }
     } finally {
       state.recovering = false;
+      scheduleRecovery(state.recovery);
     }
   }
 
   async function translateCurrentPage() {
     syncPageIdentity();
     const pageUrl = state.pageUrl;
-    state.recovery = null;
+    clearRecovery();
     clearExistingTranslations();
     const blocks = collectBlocks();
     if (!blocks.length) {
@@ -648,7 +671,7 @@
             if (!isCurrentRun(token, pageUrl)) return;
             // Stop scheduling after an error, but let already-sent requests
             // finish and render so a late success cannot overwrite error state.
-            failure = failure || error;
+            if (!failure || isUncertainRequest(error)) failure = error;
             for (const block of batch) {
               if (block.container.dataset.ytbtState !== "done") {
                 renderTranslationError(block, isUncertainRequest(error) ? "等待恢复译文" : "此段翻译未完成，点击翻译按钮重试。");
@@ -676,7 +699,7 @@
         }
       }
       if (isUncertainRequest(error)) {
-        state.recovery = { token, pageUrl, blocks };
+        state.recovery = { token, pageUrl, blocks, polls: 0 };
         showStatus("翻译响应暂时中断，已完成的译文会保留。正在检查缓存，不会自动重发付费请求。", true);
         await recoverCachedTranslations();
       } else {
@@ -1106,7 +1129,8 @@
   }
 
   async function translateBatch(batch, cacheOnly = false, pageUrl = state.pageUrl) {
-    const response = await sendMessage({
+    if (!batch.length) return [];
+    const message = {
       type: "IMMERSIVE_TRANSLATE",
       pageUrl,
       cacheOnly,
@@ -1115,7 +1139,8 @@
         sourceText: block.sourceText,
         formattedText: block.formattedText
       }))
-    });
+    };
+    const response = cacheOnly ? await sendMessage(message) : await sendWithCacheProgress(message);
 
     if (!response || response.ok === false) {
       const error = response && response.errors && response.errors[0];
@@ -1123,6 +1148,43 @@
     }
 
     return Array.isArray(response.items) ? response.items : [];
+  }
+
+  function sendWithCacheProgress(message) {
+    const token = state.runToken;
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let timer;
+      function finish(error, response) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (error) reject(error);
+        else resolve(response);
+      }
+      const current = () => !settled && isCurrentRun(token, message.pageUrl);
+      const poll = async () => {
+        if (!current()) return;
+        try {
+          // Short read-only messages retrieve persisted results even if the
+          // original response channel is stuck, and give a busy MV3 worker
+          // activity while it waits on a slow provider. Never replay paid work.
+          const response = await sendMessage({ ...message, cacheOnly: true });
+          if (!current()) return;
+          const completed = new Set((response && response.items || [])
+            .filter((item) => item && item.translatedText).map((item) => String(item.id)));
+          if (response && response.ok !== false && message.items.every((item) => completed.has(String(item.id)))) {
+            finish(null, response);
+          }
+        } catch (_) {
+          // A failed cache probe does not cancel the original request.
+        } finally {
+          if (current()) timer = setTimeout(poll, CACHE_POLL_INTERVAL_MS);
+        }
+      };
+      timer = setTimeout(poll, CACHE_POLL_INTERVAL_MS);
+      sendMessage(message).then((response) => finish(null, response), (error) => finish(error));
+    });
   }
 
   function sendMessage(message) {

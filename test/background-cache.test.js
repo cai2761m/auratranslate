@@ -276,6 +276,10 @@ test("immersive storage failures do not silently repay for a completed translati
   fixture.hooks.setError = "QUOTA_BYTES quota exceeded";
   assert.equal((await worker.request(immersiveMessage(["Paragraph"]))).ok, false);
   assert.equal(fixture.fetchCount, 1);
+  const recovered = await worker.request(immersiveMessage(["Paragraph"], { cacheOnly: true }));
+  assert.equal(recovered.ok, true);
+  assert.equal(recovered.items[0].translatedText, "Translated: Paragraph");
+  assert.equal(fixture.fetchCount, 1, "cache-only recovery can use memory after persistence fails");
   delete fixture.hooks.setError;
   assert.equal((await worker.request(immersiveMessage(["Paragraph"]))).ok, true);
   assert.equal(fixture.fetchCount, 1);

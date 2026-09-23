@@ -491,6 +491,10 @@ async function handleImmersiveTranslate(message) {
       results.set(cue.id, { translatedText: stored.translatedText, cached: true });
     } else if (legacy && legacy.sourceText === cue.plainText && typeof legacy.translatedText === "string" && legacy.translatedText.trim()) {
       results.set(cue.id, { translatedText: legacy.translatedText, cached: true });
+    } else if (message.cacheOnly === true && completedCueTranslations.has(inFlightCueKey(cacheKey, cue.id, cue.sourceText))) {
+      // A successful provider response is still usable while storage is slow
+      // or full. Cache probes must never call the provider to recover it.
+      results.set(cue.id, { ...completedCueTranslations.get(inFlightCueKey(cacheKey, cue.id, cue.sourceText)), cached: true });
     } else {
       missing.push(cue);
     }
