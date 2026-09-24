@@ -5,10 +5,6 @@
   background: #f5f7fb;
 }
 
-html {
-  scroll-behavior: smooth;
-}
-
 body {
   margin: 0;
 }
@@ -61,6 +57,7 @@ p {
 .settings-sidebar {
   position: sticky;
   top: 20px;
+  min-width: 0;
 }
 
 .sidebar-nav {
@@ -72,19 +69,40 @@ p {
   background: #fff;
 }
 
+/* Each entry switches to its own sub-page instead of scrolling to a section. */
 .sidebar-link {
   display: grid;
   gap: 3px;
+  box-sizing: border-box;
+  width: 100%;
   padding: 11px 12px;
+  border: 1px solid transparent;
   border-radius: 7px;
+  background: transparent;
   color: #111827;
-  text-decoration: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
 .sidebar-link:hover,
 .sidebar-link:focus-visible {
   background: #eff6ff;
   outline: none;
+}
+
+.sidebar-link:focus-visible {
+  border-color: #93c5fd;
+}
+
+.sidebar-link[aria-selected="true"] {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  box-shadow: inset 3px 0 0 #2563eb;
+}
+
+.sidebar-link[aria-selected="true"] .sidebar-title {
+  color: #1d4ed8;
 }
 
 .sidebar-title {
@@ -109,17 +127,39 @@ p {
   padding: 22px;
 }
 
+/* Only the active sub-page is rendered; the others stay in the form with their values. */
 .settings-section {
-  scroll-margin-top: 24px;
-  padding-bottom: 20px;
-  margin-bottom: 22px;
-  border-bottom: 1px solid #e5e7eb;
+  margin-bottom: 4px;
 }
 
-.settings-section:last-of-type {
-  padding-bottom: 0;
-  margin-bottom: 20px;
-  border-bottom: 0;
+.settings-section[hidden] {
+  display: none;
+}
+
+.settings-section:focus-visible {
+  outline: none;
+}
+
+.settings-section:not([hidden]) {
+  animation: subpage-in 0.18s ease-out;
+}
+
+@keyframes subpage-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-section:not([hidden]) {
+    animation: none;
+  }
 }
 
 .section-heading {
@@ -189,7 +229,9 @@ p {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  padding-top: 2px;
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid #e5e7eb;
 }
 
 button {
@@ -229,14 +271,19 @@ button.secondary:hover {
     margin: 20px auto;
   }
 
+  /* A single column that may shrink, so the swipeable strip scrolls inside the
+     sidebar instead of widening the whole page. */
   .settings-layout {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .settings-sidebar {
-    position: static;
+    position: sticky;
+    top: 0;
+    z-index: 1;
   }
 
+  /* Sub-page entries become a swipeable strip so all pages stay reachable. */
   .sidebar-nav {
     display: flex;
     gap: 8px;
@@ -244,8 +291,14 @@ button.secondary:hover {
     padding: 8px;
   }
 
+  /* Equal bases keep every sub-page entry the same width in the strip. */
   .sidebar-link {
-    min-width: 148px;
+    flex: 1 0 158px;
+    width: auto;
+  }
+
+  .sidebar-link[aria-selected="true"] {
+    box-shadow: inset 0 -3px 0 #2563eb;
   }
 }
 

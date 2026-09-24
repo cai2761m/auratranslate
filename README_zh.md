@@ -40,6 +40,8 @@ git clone https://github.com/cai2761m/auratranslate.git
 
 ### 2. 配置 API
 
+设置页左侧有三个独立子页面：**实时字幕**、**沉浸式翻译**、**通用设置**；一次只显示一页，不再把全部分组串成一长条。地址栏的 `#realtime-api`、`#immersive-api`、`#general-settings` 可直接定位到某一页，浏览器前进/后退也能在子页面间切换。**保存设置** 与 **清空翻译缓存** 对三个子页面同时生效。
+
 在 **实时字幕翻译 API** 中填写：
 
 | 设置项 | 填写内容 |

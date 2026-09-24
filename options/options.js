@@ -21,12 +21,22 @@
   const status = document.querySelector("#status");
   const clearCache = document.querySelector("#clear-cache");
 
+  // Each entry owns one sub-page; the hash keeps the current page shareable and reloadable.
+  const SUB_PAGES = [
+    { id: "realtime-api", label: "实时字幕" },
+    { id: "immersive-api", label: "沉浸式翻译" },
+    { id: "general-settings", label: "通用设置" }
+  ];
+  const DEFAULT_SUB_PAGE = SUB_PAGES[0].id;
+
   init();
 
   async function init() {
     if (!form) {
       return;
     }
+
+    setupSubPageNavigation();
 
     const settings = await storageGet(Core.DEFAULT_SETTINGS);
     hydrateApiFields(realtimeApi, settings, "realtime");
@@ -82,6 +92,109 @@
     if (clearCache) {
       clearCache.addEventListener("click", clearTranslationCache);
     }
+  }
+
+  function setupSubPageNavigation() {
+    const pages = [];
+    for (const subPage of SUB_PAGES) {
+      const tab = document.querySelector(`#tab-${subPage.id}`);
+      const panel = document.querySelector(`#${subPage.id}`);
+      if (tab && panel) {
+        pages.push({ id: subPage.id, label: subPage.label, tab, panel });
+      }
+    }
+    if (!pages.length) {
+      return;
+    }
+
+    const activate = (id, options = {}) => {
+      const target = pages.find((page) => page.id === id) || pages[0];
+      for (const page of pages) {
+        const selected = page === target;
+        // Hidden sub-pages keep their values, so one save button still stores every page.
+        page.panel.hidden = !selected;
+        page.tab.setAttribute("aria-selected", String(selected));
+        page.tab.setAttribute("tabindex", selected ? "0" : "-1");
+      }
+      if (options.title !== false) {
+        document.title = `${target.label} · AuraTranslate 设置`;
+      }
+      if (options.updateUrl) {
+        writeSubPageHash(target.id);
+      }
+      if (options.focusTab) {
+        target.tab.focus();
+      }
+      if (options.scroll) {
+        scrollToLayoutTop();
+      }
+    };
+
+    const moveFocus = (index) => {
+      const next = pages[(index + pages.length) % pages.length];
+      activate(next.id, { updateUrl: true, scroll: true, focusTab: true });
+    };
+
+    pages.forEach((page, index) => {
+      page.tab.addEventListener("click", () => {
+        activate(page.id, { updateUrl: true, scroll: true });
+      });
+      page.tab.addEventListener("keydown", (event) => {
+        if (event.key === "ArrowDown" || event.key === "ArrowRight") {
+          moveFocus(index + 1);
+        } else if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
+          moveFocus(index - 1);
+        } else if (event.key === "Home") {
+          moveFocus(0);
+        } else if (event.key === "End") {
+          moveFocus(pages.length - 1);
+        } else {
+          return;
+        }
+        event.preventDefault();
+      });
+    });
+
+    if (typeof window !== "undefined" && window.addEventListener) {
+      const followHistory = () => activate(currentSubPageId(), { updateUrl: false });
+      window.addEventListener("hashchange", followHistory);
+      window.addEventListener("popstate", followHistory);
+    }
+
+    activate(currentSubPageId(), { updateUrl: false });
+  }
+
+  function currentSubPageId() {
+    if (typeof window === "undefined" || !window.location) {
+      return DEFAULT_SUB_PAGE;
+    }
+    const id = String(window.location.hash || "").replace(/^#\/?/, "");
+    return SUB_PAGES.some((page) => page.id === id) ? id : DEFAULT_SUB_PAGE;
+  }
+
+  function writeSubPageHash(id) {
+    if (typeof window === "undefined" || !window.history || !window.location) {
+      return;
+    }
+    if (String(window.location.hash || "").replace(/^#/, "") === id) {
+      return;
+    }
+    try {
+      window.history.pushState(null, "", `#${id}`);
+    } catch (error) {
+      // Sandboxed documents cannot rewrite the URL; the sub-page switch still applies.
+    }
+  }
+
+  function scrollToLayoutTop() {
+    if (typeof window === "undefined" || typeof window.scrollTo !== "function") {
+      return;
+    }
+    const layout = document.querySelector(".settings-layout");
+    const top = layout && typeof layout.getBoundingClientRect === "function"
+      ? Math.max(layout.getBoundingClientRect().top + (window.scrollY || 0) - 20, 0)
+      : 0;
+    window.scrollTo({ top, behavior: "smooth" });
   }
 
   function createApiFields(prefix) {

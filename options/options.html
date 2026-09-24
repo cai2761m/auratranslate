@@ -17,26 +17,29 @@
       </header>
 
       <div class="settings-layout">
-        <aside class="settings-sidebar" aria-label="设置导航">
-          <nav class="sidebar-nav">
-            <a href="#realtime-api" class="sidebar-link">
+        <aside class="settings-sidebar">
+          <nav class="sidebar-nav" role="tablist" aria-orientation="vertical" aria-label="设置导航">
+            <button type="button" id="tab-realtime-api" class="sidebar-link" role="tab"
+              aria-controls="realtime-api" aria-selected="true" tabindex="0">
               <span class="sidebar-title">实时字幕</span>
               <span class="sidebar-desc">视频双语字幕 API</span>
-            </a>
-            <a href="#immersive-api" class="sidebar-link">
+            </button>
+            <button type="button" id="tab-immersive-api" class="sidebar-link" role="tab"
+              aria-controls="immersive-api" aria-selected="false" tabindex="-1">
               <span class="sidebar-title">沉浸式翻译</span>
               <span class="sidebar-desc">网页翻译 API</span>
-            </a>
-            <a href="#general-settings" class="sidebar-link">
+            </button>
+            <button type="button" id="tab-general-settings" class="sidebar-link" role="tab"
+              aria-controls="general-settings" aria-selected="false" tabindex="-1">
               <span class="sidebar-title">通用设置</span>
               <span class="sidebar-desc">语言、字幕与缓存</span>
-            </a>
+            </button>
           </nav>
         </aside>
 
         <div class="settings-content">
           <form id="settings-form" class="panel">
-            <section id="realtime-api" class="settings-section">
+            <section id="realtime-api" class="settings-section" role="tabpanel" aria-labelledby="tab-realtime-api" tabindex="0">
               <div class="section-heading">
                 <p class="section-kicker">YouTube / Google Drive</p>
                 <h2>实时字幕翻译 API</h2>
@@ -73,7 +76,7 @@
               </label>
             </section>
 
-            <section id="immersive-api" class="settings-section">
+            <section id="immersive-api" class="settings-section" role="tabpanel" aria-labelledby="tab-immersive-api" tabindex="0" hidden>
               <div class="section-heading">
                 <p class="section-kicker">Webpage</p>
                 <h2>沉浸式翻译 API</h2>
@@ -128,7 +131,7 @@
               <p class="section-note">免 Key 接口没有官方稳定性保证，可能限流、不可访问或失效。官方接口的兜底请求可能产生额外费用；主 API 超时也可能已经计费。两种方式都会缓存成功译文，失败时保留已完成内容。切换兜底不会清除已有译文。</p>
             </section>
 
-            <section id="general-settings" class="settings-section">
+            <section id="general-settings" class="settings-section" role="tabpanel" aria-labelledby="tab-general-settings" tabindex="0" hidden>
               <div class="section-heading">
                 <p class="section-kicker">General</p>
                 <h2>通用设置</h2>

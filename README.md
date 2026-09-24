@@ -40,6 +40,8 @@ No build step or npm installation is needed to load the extension. Node.js depen
 
 ### 2. Configure your API
 
+The settings page has three independent sub-pages on the left: **实时字幕** (Real-time subtitles), **沉浸式翻译** (Immersive translation) and **通用设置** (General). Only one is shown at a time instead of stacking every group into one long page. The `#realtime-api`, `#immersive-api` and `#general-settings` hashes open a specific sub-page directly, and the browser back/forward buttons move between them. **保存设置** (Save) and **清空翻译缓存** (Clear cache) apply to all three sub-pages.
+
 Under **实时字幕翻译 API** (Real-time subtitle API), enter:
 
 | Setting | What to enter |
