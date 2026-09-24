@@ -1,7 +1,5 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
 const vm = require("node:vm");
 
 const Core = require("../src/shared.js");
@@ -83,13 +81,12 @@ test("background segments subtitles before translation and reuses its cache", as
         }
       };
     },
-    importScripts() {},
+
     setTimeout,
     clearTimeout,
     YTBTCore: Core
   });
-  const source = fs.readFileSync(path.join(__dirname, "../src/background.js"), "utf8");
-  vm.runInContext(source, context);
+  require("../scripts/extension-scripts.cjs").loadBackground(context);
 
   const message = {
     type: "SEGMENT_SUBTITLES",

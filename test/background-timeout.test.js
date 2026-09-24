@@ -1,7 +1,5 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
 const vm = require("node:vm");
 const Core = require("../src/shared.js");
 
@@ -24,7 +22,7 @@ function fixture(stallBody) {
       } };
     }
   });
-  vm.runInContext(fs.readFileSync(path.join(__dirname, "../src/background.js"), "utf8"), context);
+  require("../scripts/extension-scripts.cjs").loadBackground(context);
   return { context, timers, get fetchCount() { return fetchCount; }, get bodyStarted() { return bodyStarted; } };
 }
 

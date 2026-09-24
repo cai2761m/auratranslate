@@ -166,7 +166,13 @@ Windows 下如果 PowerShell 阻止执行 `npm.ps1`，改用 `npm.cmd ci` 和 `n
 ```text
 manifest.json       扩展信息、权限与入口
 src/
-  background.js     API 请求、缓存持久化与消息分发
+  background.js     后台启动入口与消息分发
+  background-core.js        后台共享状态与存储工具
+  background-subtitles.js   字幕翻译与断句处理
+  background-immersive.js   网页缓存标识与备用服务选择
+  background-google.js      Google 翻译与格式校验
+  background-requests.js    请求去重、服务调用与超时处理
+  background-cache.js       缓存串行写入与淘汰
   content-core.js   内容脚本常量、共享状态与工具函数
   content-captions.js     字幕轨道发现、抓取与预翻译缓存
   content-translation.js  翻译队列、批量调度与 API 退避
@@ -174,8 +180,19 @@ src/
   content-overlay.js      字幕叠加层渲染与拖拽
   content-main.js   设置绑定、播放器消息与启动引导
   drive.js          Drive 转写稿读取与内嵌播放器通信
-  immersive.js      网页提取、翻译调度与译文显示
-  shared.js         默认设置、字幕工具与 API 配置
+  immersive.js      网页翻译启动入口与生命周期监听
+  immersive-core.js         页面共享状态与存储工具
+  immersive-controls.js     悬浮球、拖动与显示模式
+  immersive-dom.js          可读内容提取与语言筛选
+  immersive-render.js       行内格式保留与译文渲染
+  immersive-translation.js  视口优先调度与缓存恢复
+  shared.js         公共工具接口与 Node 入口
+  shared-settings.js        默认设置、语言、API 配置与缓存键
+  shared-runtime.js         扩展消息通信与错误分类
+  shared-text.js            文本规范化与字幕标点
+  shared-captions.js        YouTube 与 Drive 字幕解析
+  shared-translation.js     翻译服务响应解析
+  shared-segmentation.js    字幕片段合并与断句
   page-bridge.js    YouTube 播放器元数据与字幕请求桥接
   overlay.css       字幕样式
   immersive.css     网页翻译样式
@@ -183,3 +200,5 @@ options/            设置界面
 popup/              字幕开关与设置入口
 test/               自动化测试与测试数据
 ```
+
+无需构建步骤。浏览器按 `manifest.json` 中的顺序加载脚本；设置页和弹窗 HTML 同样在 `shared.js` 前列出共享模块。Chrome 同步导入后台依赖，Firefox 使用对应的 `background.scripts` 列表，新增模块时需同步维护两处。共享模块保留原有 `YTBTCore` 接口，网页翻译模块使用独立的 `YTBTImmersive` 命名空间，避免与字幕脚本的变量冲突。Node 测试仍可使用 `require("./src/shared.js")`。

@@ -1,7 +1,6 @@
 // Controlled DOM/scheduler benchmark, not real browser or provider timings.
 // Usage: node scripts/benchmark-immersive.cjs <baseline-git-ref>
 const { execFileSync } = require("node:child_process");
-const fs = require("node:fs");
 const path = require("node:path");
 const { performance } = require("node:perf_hooks");
 const { JSDOM } = require("jsdom");
@@ -10,10 +9,14 @@ const assert = require("node:assert/strict");
 const root = path.resolve(__dirname, "..");
 const baseline = process.argv[2];
 if (!baseline) throw new Error("Pass a baseline Git ref for comparison.");
-const shared = fs.readFileSync(path.join(root, "src/shared.js"), "utf8");
+const extensionScripts = require("./extension-scripts.cjs");
+const shared = extensionScripts.source("shared");
+const baselineManifest = JSON.parse(execFileSync("git", ["show", `${baseline}:manifest.json`], { cwd: root, encoding: "utf8" }));
+const baselineFiles = baselineManifest.content_scripts.find(entry => entry.js.includes("src/immersive.js"))
+  .js.filter(file => /\/immersive(?:-|\.)/.test(file));
 const sources = {
-  baseline: execFileSync("git", ["show", `${baseline}:src/immersive.js`], { cwd: root, encoding: "utf8" }),
-  current: fs.readFileSync(path.join(root, "src/immersive.js"), "utf8")
+  baseline: baselineFiles.map(file => execFileSync("git", ["show", `${baseline}:${file}`], { cwd: root, encoding: "utf8" })).join("\n;\n"),
+  current: extensionScripts.source("immersive")
 };
 const longText = "This offscreen paragraph contains detailed instructions for the next section. ".repeat(30);
 const html = `<main><p data-index="0">Read this visible introduction first.</p>${

@@ -748,7 +748,7 @@ function startBackground(storage, providerCalls) {
       }); } };
     }
   });
-  vm.runInContext(fs.readFileSync(path.join(__dirname, "../src/background.js"), "utf8"), context);
+  require("../scripts/extension-scripts.cjs").loadBackground(context);
   return (message) => new Promise((resolve) => assert.equal(listener(message, {}, resolve), true));
 }
 

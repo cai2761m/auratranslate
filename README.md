@@ -168,7 +168,13 @@ The test suite covers caption parsing, configuration persistence, sentence segme
 ```text
 manifest.json       Extension metadata, permissions, and entry points
 src/
-  background.js     API requests, cache persistence, and message routing
+  background.js     Background entry point and message routing
+  background-core.js        Shared request state and storage helpers
+  background-subtitles.js   Subtitle translation and segmentation handlers
+  background-immersive.js   Webpage cache identity and fallback selection
+  background-google.js      Google translation and formatting validation
+  background-requests.js    Request deduplication, provider calls, and timeouts
+  background-cache.js       Serialized cache writes and eviction
   content-core.js   Content-script constants, shared state, and helpers
   content-captions.js     Caption discovery, fetching, and prepared-cue cache
   content-translation.js  Translation queue, batching, and API backoff
@@ -176,8 +182,19 @@ src/
   content-overlay.js      Subtitle overlay rendering and dragging
   content-main.js   Settings wiring, player messages, and bootstrap
   drive.js          Drive transcript extraction and embedded-player bridge
-  immersive.js      Webpage extraction, translation scheduling, and rendering
-  shared.js         Settings, caption utilities, and API configuration
+  immersive.js      Webpage entry point and lifecycle listeners
+  immersive-core.js         Shared page state and storage helpers
+  immersive-controls.js     Floating control, dragging, and display modes
+  immersive-dom.js          Readable block selection and language filtering
+  immersive-render.js       Inline formatting and translated DOM rendering
+  immersive-translation.js  Viewport scheduling and cache recovery
+  shared.js         Public shared API and Node entry point
+  shared-settings.js        Defaults, languages, API configuration, cache keys
+  shared-runtime.js         Runtime messaging and error classification
+  shared-text.js            Text normalization and display punctuation
+  shared-captions.js        YouTube and Drive caption parsers
+  shared-translation.js     Provider response parsing
+  shared-segmentation.js    Fragment merging and sentence segmentation
   page-bridge.js    YouTube player metadata and caption request bridge
   overlay.css       Subtitle styles
   immersive.css     Webpage translation styles
@@ -185,3 +202,5 @@ options/            Settings interface
 popup/              Subtitle switch and settings entry point
 test/               Automated tests and fixtures
 ```
+
+No build step is required. Browser scripts load in the order declared in `manifest.json`; the options and popup HTML also list the shared modules before `shared.js`. Chrome imports background dependencies synchronously, while Firefox uses the equivalent `background.scripts` list. Keep both lists in sync when adding a module. Shared modules expose the existing `YTBTCore` API, and webpage modules use a separate `YTBTImmersive` namespace to avoid subtitle-script name collisions. Node tests can continue to use `require("./src/shared.js")`.

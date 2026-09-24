@@ -1,11 +1,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
 const vm = require("node:vm");
 
 const Core = require("../src/shared.js");
-const backgroundSource = fs.readFileSync(path.join(__dirname, "../src/background.js"), "utf8");
 
 function deferred() {
   let resolve;
@@ -79,7 +76,7 @@ function createFixture(settings = {}) {
       console,
       setTimeout,
       clearTimeout,
-      importScripts() {},
+
       YTBTCore: Core,
       async fetch(url, options) {
         fixture.fetchCount += 1;
@@ -115,7 +112,7 @@ function createFixture(settings = {}) {
         };
       }
     });
-    vm.runInContext(backgroundSource, context);
+    require("../scripts/extension-scripts.cjs").loadBackground(context);
     return {
       request(message) {
         return new Promise((resolve) => {
@@ -297,9 +294,9 @@ test("page-to-worker Google translation renders whole sentences and restores cod
     window.chrome = { runtime: {}, storage: { local: {
       get: (defaults, done) => done({ ...defaults, ...fixture.storage }), set: (_, done) => done()
     } } };
-    window.eval(fs.readFileSync(path.join(__dirname, "../src/shared.js"), "utf8"));
+    window.eval(require("../scripts/extension-scripts.cjs").source("shared"));
     window.YTBTCore = { ...window.YTBTCore, sendRuntimeMessage: (_, message) => worker.request(message) };
-    window.eval(fs.readFileSync(path.join(__dirname, "../src/immersive.js"), "utf8"));
+    window.eval(require("../scripts/extension-scripts.cjs").source("immersive"));
     const ball = window.document.querySelector(".ytbt-immersive-tab");
     ball.click();
     for (let turn = 0; turn < 100 && ball.dataset.ytbtState === "translating"; turn++) {

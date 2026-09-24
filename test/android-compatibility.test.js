@@ -23,7 +23,7 @@ for (const mode of ["Firefox event page", "Chrome service worker"]) {
       if (mode === "Firefox event page") {
         for (const script of manifest.background.scripts) run(script);
       } else {
-        context.importScripts = (file) => run(`src/${file}`);
+        context.importScripts = (...files) => files.forEach(file => run(`src/${file}`));
         run(manifest.background.service_worker);
       }
       assert.equal(typeof listener, "function", "registration must be synchronous");
@@ -56,7 +56,8 @@ test("manifest includes the Firefox for Android compatibility surface", () => {
   assert.ok(youtubeMatches.includes("https://m.youtube.com/*"));
   assert.ok(resourceMatches.includes("https://m.youtube.com/*"));
   assert.equal(manifest.background.service_worker, "src/background.js");
-  assert.deepEqual(manifest.background.scripts, ["src/shared.js", "src/background.js"]);
+  assert.equal(manifest.background.scripts.at(-1), "src/background.js");
+  assert.ok(manifest.background.scripts.includes("src/background-core.js"));
   assert.equal(manifest.options_ui.page, "options/options.html");
 });
 
@@ -70,8 +71,14 @@ test("mobile popup and subtitle styles do not force desktop dimensions", () => {
   assert.match(overlayCss, /safe-area-inset-bottom/);
 });
 
-test("background script only imports shared code in service-worker mode", () => {
+test("worker imports match Firefox event-page dependencies in the same order", () => {
   const background = fs.readFileSync(path.join(root, "src/background.js"), "utf8");
   assert.match(background, /typeof importScripts === "function"/);
-  assert.match(background, /importScripts\("shared\.js"\)/);
+  const imports = [];
+  vm.runInNewContext(background, {
+    importScripts(...files) { imports.push(...files.map(file => `src/${file}`)); },
+    chrome: { runtime: { onMessage: { addListener() {} } } }
+  });
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"));
+  assert.deepEqual(imports, manifest.background.scripts.slice(0, -1));
 });

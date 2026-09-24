@@ -1,11 +1,9 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
 const { JSDOM } = require("jsdom");
 
-const sharedScript = fs.readFileSync(path.join(__dirname, "../src/shared.js"), "utf8");
-const immersiveScript = fs.readFileSync(path.join(__dirname, "../src/immersive.js"), "utf8");
+const sharedScript = require("../scripts/extension-scripts.cjs").source("shared");
+const immersiveScript = require("../scripts/extension-scripts.cjs").source("immersive");
 
 async function translatePage(t, html, options = {}) {
   const dom = new JSDOM(html, { url: "https://docs.flutter.dev/install/quick", runScripts: "outside-only", pretendToBeVisual: true });

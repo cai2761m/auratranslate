@@ -1,7 +1,5 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
 const vm = require("node:vm");
 
 function fixture(send) {
@@ -23,7 +21,7 @@ function fixture(send) {
     },
     clearTimeout(id) { timers.delete(id); }
   });
-  vm.runInContext(fs.readFileSync(path.join(__dirname, "../src/shared.js"), "utf8"), context);
+  vm.runInContext(require("../scripts/extension-scripts.cjs").source("shared"), context);
   return {
     core: context.YTBTCore, runtime, calls, timers,
     tick(ms) {

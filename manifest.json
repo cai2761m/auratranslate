@@ -8,14 +8,19 @@
       "id": "auratranslate@cai2761m.github.io",
       "strict_min_version": "140.0",
       "data_collection_permissions": {
-        "required": ["websiteContent", "authenticationInfo"]
+        "required": [
+          "websiteContent",
+          "authenticationInfo"
+        ]
       }
     },
     "gecko_android": {
       "strict_min_version": "142.0"
     }
   },
-  "permissions": ["storage"],
+  "permissions": [
+    "storage"
+  ],
   "host_permissions": [
     "https://www.youtube.com/*",
     "https://m.youtube.com/*",
@@ -26,38 +31,125 @@
   ],
   "background": {
     "service_worker": "src/background.js",
-    "scripts": ["src/shared.js", "src/background.js"]
+    "scripts": [
+      "src/shared-settings.js",
+      "src/shared-runtime.js",
+      "src/shared-text.js",
+      "src/shared-captions.js",
+      "src/shared-translation.js",
+      "src/shared-segmentation.js",
+      "src/shared.js",
+      "src/background-core.js",
+      "src/background-subtitles.js",
+      "src/background-immersive.js",
+      "src/background-google.js",
+      "src/background-requests.js",
+      "src/background-cache.js",
+      "src/background.js"
+    ]
   },
   "content_scripts": [
     {
-      "matches": ["https://www.youtube.com/*", "https://m.youtube.com/*"],
-      "js": ["src/shared.js", "src/content-core.js", "src/content-captions.js", "src/content-translation.js", "src/content-player.js", "src/content-overlay.js", "src/content-main.js"],
-      "css": ["src/overlay.css"],
+      "matches": [
+        "https://www.youtube.com/*",
+        "https://m.youtube.com/*"
+      ],
+      "js": [
+        "src/shared-settings.js",
+        "src/shared-runtime.js",
+        "src/shared-text.js",
+        "src/shared-captions.js",
+        "src/shared-translation.js",
+        "src/shared-segmentation.js",
+        "src/shared.js",
+        "src/content-core.js",
+        "src/content-captions.js",
+        "src/content-translation.js",
+        "src/content-player.js",
+        "src/content-overlay.js",
+        "src/content-main.js"
+      ],
+      "css": [
+        "src/overlay.css"
+      ],
       "run_at": "document_start"
     },
     {
-      "matches": ["https://youtube.googleapis.com/embed/*"],
-      "js": ["src/shared.js", "src/content-core.js", "src/content-captions.js", "src/content-translation.js", "src/content-player.js", "src/content-overlay.js", "src/content-main.js"],
-      "css": ["src/overlay.css"],
+      "matches": [
+        "https://youtube.googleapis.com/embed/*"
+      ],
+      "js": [
+        "src/shared-settings.js",
+        "src/shared-runtime.js",
+        "src/shared-text.js",
+        "src/shared-captions.js",
+        "src/shared-translation.js",
+        "src/shared-segmentation.js",
+        "src/shared.js",
+        "src/content-core.js",
+        "src/content-captions.js",
+        "src/content-translation.js",
+        "src/content-player.js",
+        "src/content-overlay.js",
+        "src/content-main.js"
+      ],
+      "css": [
+        "src/overlay.css"
+      ],
       "run_at": "document_start",
       "all_frames": true
     },
     {
-      "matches": ["https://drive.google.com/file/*"],
-      "js": ["src/shared.js", "src/drive.js"],
+      "matches": [
+        "https://drive.google.com/file/*"
+      ],
+      "js": [
+        "src/shared-settings.js",
+        "src/shared-runtime.js",
+        "src/shared-text.js",
+        "src/shared-captions.js",
+        "src/shared-translation.js",
+        "src/shared-segmentation.js",
+        "src/shared.js",
+        "src/drive.js"
+      ],
       "run_at": "document_start"
     },
     {
-      "matches": ["http://*/*", "https://*/*"],
-      "js": ["src/shared.js", "src/immersive.js"],
-      "css": ["src/immersive.css"],
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "src/shared-settings.js",
+        "src/shared-runtime.js",
+        "src/shared-text.js",
+        "src/shared-captions.js",
+        "src/shared-translation.js",
+        "src/shared-segmentation.js",
+        "src/shared.js",
+        "src/immersive-core.js",
+        "src/immersive-controls.js",
+        "src/immersive-dom.js",
+        "src/immersive-render.js",
+        "src/immersive-translation.js",
+        "src/immersive.js"
+      ],
+      "css": [
+        "src/immersive.css"
+      ],
       "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["src/page-bridge.js"],
-      "matches": ["https://www.youtube.com/*", "https://m.youtube.com/*"]
+      "resources": [
+        "src/page-bridge.js"
+      ],
+      "matches": [
+        "https://www.youtube.com/*",
+        "https://m.youtube.com/*"
+      ]
     }
   ],
   "options_page": "options/options.html",
