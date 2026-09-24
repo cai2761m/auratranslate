@@ -9,25 +9,77 @@
   <body>
     <main class="popup">
       <header class="popup-header">
-        <div>
+        <div class="brand-mark" aria-hidden="true">A</div>
+        <div class="brand-copy">
           <h1>AuraTranslate</h1>
-          <p>配置实时字幕翻译和沉浸式网页翻译。</p>
+          <p>视频字幕 · 网页翻译</p>
         </div>
-        <button id="open-settings" type="button" class="secondary compact">设置</button>
+        <span id="version" class="version"></span>
       </header>
 
-      <section class="panel">
-        <label class="popup-toggle">
-          <span>
-            <strong>启用视频实时翻译</strong>
-            <small>开启后在 YouTube 和 Google Drive 视频中显示中英双语字幕，并隐藏原生字幕。</small>
-          </span>
-          <input id="subtitle-enabled-toggle" type="checkbox">
+      <section class="language-card" aria-label="翻译语言">
+        <label class="language-field">
+          <span>源语言</span>
+          <select id="source-language" aria-label="源语言">
+            <option value="en">英语</option>
+          </select>
+        </label>
+        <span class="language-arrow" aria-hidden="true">→</span>
+        <label class="language-field target-language">
+          <span>目标语言</span>
+          <select id="target-language" aria-label="目标语言">
+            <option value="zh-CN">简体中文</option>
+            <option value="zh-TW">繁体中文</option>
+          </select>
         </label>
       </section>
 
+      <section class="panel translation-panel">
+        <label class="popup-toggle">
+          <span class="toggle-copy">
+            <strong>视频实时翻译</strong>
+            <small>YouTube 和 Google Drive 双语字幕</small>
+          </span>
+          <input id="subtitle-enabled-toggle" type="checkbox" aria-label="启用视频实时翻译">
+        </label>
+      </section>
+
+      <button id="open-service-settings" type="button" class="service-row">
+        <span class="service-icon" aria-hidden="true">文</span>
+        <span class="service-copy">
+          <strong>翻译服务</strong>
+          <small id="service-name">读取设置中…</small>
+        </span>
+        <span class="service-action">配置 <span aria-hidden="true">›</span></span>
+      </button>
+
+      <footer class="popup-footer">
+        <button id="open-settings" type="button" class="footer-action">
+          <span class="footer-icon" aria-hidden="true">⚙</span>
+          设置
+        </button>
+        <button id="more-toggle" type="button" class="footer-action more-action" aria-expanded="false" aria-controls="more-panel">
+          更多功能 <span class="chevron" aria-hidden="true">⌄</span>
+        </button>
+      </footer>
+
+      <section id="more-panel" class="more-panel" hidden>
+        <label class="scope-field">
+          <span>字幕翻译范围</span>
+          <select id="subtitle-mode">
+            <option value="economy">省 token 模式</option>
+            <option value="full">翻译整部视频</option>
+          </select>
+        </label>
+        <div class="webpage-tip">
+          <span class="webpage-tip-icon" aria-hidden="true">Aa</span>
+          <p><strong>沉浸式网页翻译</strong><br>打开网页后，点击页面右侧的圆形按钮开始翻译。</p>
+        </div>
+        <button id="open-settings-more" type="button" class="settings-link">管理 API、缓存和其他设置 <span aria-hidden="true">↗</span></button>
+      </section>
     </main>
 
+    <script src="src/shared.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>
