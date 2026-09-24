@@ -31,7 +31,7 @@ test("Google fallback is opt-in and both modes preserve their independent Cloud 
 test("legacy DeepSeek credentials become an editable service and keep translating", async (t) => {
   const storage = { deepseekApiKey: "legacy-test-key" };
   const page = await openSettings(t, storage);
-  const card = page.document.querySelector(".service-card");
+  const card = page.document.querySelector(".service-entry");
   assert.ok(card, "the legacy key is shown as a service");
   assert.match(card.textContent, /DeepSeek/);
   assert.equal(page.field("translationServiceId").value, "legacy-realtime");
@@ -90,9 +90,9 @@ test("a service built in the dialog drives the subtitle and immersive pages", as
   page.document.getElementById("save-service").click();
   assert.equal(page.field("service-dialog").hidden, true);
 
-  const card = page.document.querySelector(".service-card");
+  const card = page.field("service-detail");
   assert.match(card.textContent, /中转服务/);
-  assert.match(card.textContent, /cf\.example\.cc/);
+  assert.equal(page.field("detail-base-url").value, "https://cf.example.cc/v1");
   assert.match(card.textContent, /gpt-6-astra/);
   assert.match(card.textContent, /Astra/);
 
@@ -150,8 +150,8 @@ test("deleting a service clears the selections that pointed at it", async (t) =>
     translationServiceId: "service-2"
   };
   const page = await openSettings(t, storage);
-  const buttons = [...page.document.querySelectorAll('[data-action="delete-service"]')];
-  buttons[1].click();
+  page.document.querySelector('[data-select-service="service-2"]').click();
+  page.field("delete-service").click();
   assert.equal(page.field("translationServiceId").value, "service-1");
   await page.save();
   assert.equal(storage.translationServices.length, 1);
@@ -231,3 +231,108 @@ async function openSettings(t, storage) {
     }
   };
 }
+
+function serviceFixture() {
+  return {
+    translationServices: [
+      { id: "service-1", name: "备用服务", baseUrl: "https://a.example/v1", apiKey: "key-a", models: [{ id: "model-a", displayName: "别名 A" }] },
+      { id: "service-2", name: "默认服务", baseUrl: "https://b.example/v1", apiKey: "key-b", models: [{ id: "model-b", displayName: "" }] }
+    ],
+    translationServiceId: "service-2"
+  };
+}
+
+test("default and fallback services are grouped first, selection only changes the details", async (t) => {
+  const storage = serviceFixture();
+  const page = await openSettings(t, storage);
+  const priority = page.field("priority-service-list");
+  assert.deepEqual([...priority.querySelectorAll("[data-select-service]")].map((el) => el.dataset.selectService),
+    ["service-2", "builtin:google-free", "builtin:google-cloud"]);
+  assert.equal(page.field("custom-service-list").children.length, 1);
+  assert.equal(page.field("detail-name").textContent, "默认服务");
+  page.document.querySelector('[data-select-service="service-1"]').click();
+  assert.equal(page.field("detail-name").textContent, "备用服务");
+  assert.equal(page.field("translationServiceId").value, "service-2");
+  assert.equal(page.document.querySelectorAll('[data-select-service][aria-current="true"]').length, 1);
+  page.field("detail-api-key").value = "edited-key";
+  page.field("detail-api-key").dispatchEvent(new page.window.Event("input"));
+  page.field("detail-base-url").value = "https://edited.example/v1";
+  page.field("detail-base-url").dispatchEvent(new page.window.Event("input"));
+  page.document.querySelector('[data-select-service="service-2"]').click();
+  page.document.querySelector('[data-select-service="service-1"]').click();
+  assert.equal(page.field("detail-api-key").value, "edited-key");
+  await page.save();
+  assert.equal(storage.translationServices[0].apiKey, "edited-key");
+  assert.equal(storage.translationServices[0].baseUrl, "https://edited.example/v1");
+  assert.equal(storage.translationServiceId, "service-2");
+  page.field("translationServiceId").value = "service-1";
+  page.field("translationServiceId").dispatchEvent(new page.window.Event("change"));
+  assert.equal(priority.firstElementChild.dataset.selectService, "service-1");
+});
+
+test("builtin details expose Cloud credentials without enabling fallback or editing endpoints", async (t) => {
+  const storage = {};
+  const page = await openSettings(t, storage);
+  assert.equal(page.field("detail-name").textContent, "谷歌翻译");
+  assert.equal(page.field("detail-api-key").disabled, true);
+  assert.equal(page.field("detail-base-url").readOnly, true);
+  assert.equal(page.field("detail-actions").hidden, true);
+  assert.equal(page.field("detail-fetch-models").hidden, true);
+  page.document.querySelector('[data-select-service="builtin:google-cloud"]').click();
+  page.field("detail-api-key").value = "cloud-key";
+  page.field("detail-api-key").dispatchEvent(new page.window.Event("input"));
+  await page.save();
+  assert.equal(storage.immersiveGoogleApiKey, "cloud-key");
+  assert.equal(storage.immersiveFallbackProvider, "off");
+});
+
+test("detail model fetch merges ids, preserves aliases and updates model selectors", async (t) => {
+  const storage = serviceFixture();
+  const page = await openSettings(t, storage);
+  page.document.querySelector('[data-select-service="service-1"]').click();
+  page.window.fetch = async (url, options) => {
+    assert.equal(url, "https://a.example/v1/models");
+    assert.equal(options.headers.Authorization, "Bearer key-a");
+    return { ok: true, json: async () => ({ data: [{ id: "model-a" }, { id: "new-model" }, { id: "new-model" }] }) };
+  };
+  page.field("detail-fetch-models").click();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(page.document.querySelectorAll(".service-model").length, 2);
+  assert.match(page.field("detail-models").textContent, /别名 A/);
+  await page.save();
+  assert.equal(storage.translationServices[0].models.length, 2);
+  assert.equal(storage.translationServices[0].models[0].displayName, "别名 A");
+});
+
+test("late detail model responses cannot overwrite the newly selected service", async (t) => {
+  const storage = serviceFixture();
+  const page = await openSettings(t, storage);
+  let finish;
+  page.window.fetch = () => new Promise((resolve) => { finish = resolve; });
+  page.field("detail-fetch-models").click();
+  page.document.querySelector('[data-select-service="service-1"]').click();
+  finish({ ok: true, json: async () => ({ data: [{ id: "stale-model" }] }) });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.doesNotMatch(page.field("detail-models").textContent, /stale-model/);
+  assert.equal(page.field("detail-name").textContent, "备用服务");
+  await page.save();
+  assert.equal(storage.translationServices[0].models.length, 1);
+  assert.equal(storage.translationServices[1].models.length, 1);
+});
+
+test("cancelled dialog ignores late model requests and preserves the saved catalog", async (t) => {
+  const page = await openSettings(t, serviceFixture());
+  page.field("edit-service").click();
+  let finish;
+  page.window.fetch = () => new Promise((resolve) => { finish = resolve; });
+  page.field("fetch-models").click();
+  page.field("cancel-service").click();
+  page.field("add-service").click();
+  finish({ ok: true, json: async () => ({ data: [{ id: "stale-model" }] }) });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(page.document.querySelector(".model-id").value, "");
+  assert.equal(page.field("fetch-models").disabled, false);
+  page.field("service-dialog").dispatchEvent(new page.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  assert.equal(page.field("service-dialog").hidden, true);
+  assert.equal(page.field("settings-form").inert, false);
+});

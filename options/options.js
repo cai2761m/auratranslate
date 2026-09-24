@@ -29,6 +29,13 @@
   const clearCache = document.querySelector("#clear-cache");
   const serviceList = document.querySelector("#custom-service-list");
   const serviceEmpty = document.querySelector("#custom-service-empty");
+  const priorityServiceList = document.querySelector("#priority-service-list");
+  const detail = document.querySelector("#service-detail");
+  const detailApiKey = document.querySelector("#detail-api-key");
+  const detailBaseUrl = document.querySelector("#detail-base-url");
+  const detailFetchModels = document.querySelector("#detail-fetch-models");
+  const BUILTIN_FREE = "builtin:google-free";
+  const BUILTIN_CLOUD = "builtin:google-cloud";
   const dialog = document.querySelector("#service-dialog");
   const dialogTitle = document.querySelector("#service-dialog-title");
   const serviceName = document.querySelector("#service-name");
@@ -54,6 +61,9 @@
 
   const editor = {
     services: [],
+    selectedServiceId: "",
+    dialogVersion: 0,
+    detailRequest: null,
     editingServiceId: "",
     opener: null,
     translationServiceId: "",
@@ -81,6 +91,7 @@
       immersiveGoogleApiKey.value = settings.immersiveGoogleApiKey || "";
       const updateFallbackFields = () => {
         immersiveGoogleApiKey.closest("label").hidden = immersiveFallbackProvider.value !== "google-cloud";
+        renderServiceList();
       };
       updateFallbackFields();
       immersiveFallbackProvider.addEventListener("change", updateFallbackFields);
@@ -238,8 +249,8 @@
     if (immersiveTranslationJsonResponse) {
       immersiveTranslationJsonResponse.checked = settings.immersiveTranslationJsonResponse !== false;
     }
-    renderServiceList();
     renderServiceOptions();
+    renderServiceList();
   }
 
   function serviceById(id) {
@@ -251,80 +262,96 @@
       return;
     }
 
+    if (!serviceById(editor.selectedServiceId) && ![BUILTIN_FREE, BUILTIN_CLOUD].includes(editor.selectedServiceId)) {
+      editor.selectedServiceId = editor.translationServiceId || BUILTIN_FREE;
+    }
+    const scroll = document.querySelector(".services-scroll");
+    const scrollTop = scroll.scrollTop;
+    const focusedId = document.activeElement?.dataset.selectService;
     serviceList.textContent = "";
+    priorityServiceList.textContent = "";
+    let otherCount = 0;
     for (const service of editor.services) {
-      serviceList.appendChild(buildServiceCard(service));
+      const labels = [];
+      if (service.id === editor.translationServiceId) labels.push("默认");
+      if (service.id === editor.immersiveTranslationServiceId) labels.push("网页默认");
+      const target = labels.length ? priorityServiceList : serviceList;
+      target.appendChild(buildServiceEntry(service.id, service.name || "未命名供应方", labels.join(" · ") || `${service.models.length} 个模型`));
+      if (!labels.length) otherCount += 1;
     }
+    const fallback = immersiveFallbackProvider.value;
+    priorityServiceList.appendChild(buildServiceEntry(BUILTIN_FREE, "谷歌翻译", fallback === "google-free" ? "兜底 · 已启用" : "兜底 · 免 Key"));
+    priorityServiceList.appendChild(buildServiceEntry(BUILTIN_CLOUD, "Google Cloud Translation", fallback === "google-cloud" ? "兜底 · 已启用" : "兜底 · 官方 API"));
     if (serviceEmpty) {
-      serviceEmpty.hidden = editor.services.length > 0;
+      serviceEmpty.hidden = otherCount > 0;
     }
+    scroll.scrollTop = scrollTop;
+    if (focusedId) {
+      queryAll("[data-select-service]").find((button) => button.dataset.selectService === focusedId)?.focus({ preventScroll: true });
+    }
+    renderServiceDetail();
   }
 
-  function buildServiceCard(service) {
-    const card = document.createElement("article");
-    card.className = "service-card";
-    card.dataset.serviceId = service.id;
-
-    const head = document.createElement("div");
-    head.className = "service-card-head";
-    const name = document.createElement("h4");
-    name.className = "service-name";
-    if (service.name) {
-      name.textContent = service.name;
-    } else {
-      name.textContent = "未命名供应方";
-      name.classList.add("is-unnamed");
-    }
-    head.appendChild(name);
-
-    const actions = document.createElement("div");
-    actions.className = "service-actions";
-    actions.appendChild(buildCardButton("编辑", "edit-service", service, ""));
-    actions.appendChild(buildCardButton("删除", "delete-service", service, "danger"));
-    head.appendChild(actions);
-    card.appendChild(head);
-
-    const description = document.createElement("p");
-    description.className = "service-desc";
-    const label = document.createElement("span");
-    label.className = "service-desc-label";
-    label.textContent = "描述";
-    const value = document.createElement("span");
-    value.textContent = Core.describeTranslationService(service);
-    description.appendChild(label);
-    description.appendChild(value);
-    card.appendChild(description);
-
-    if (service.models.length) {
-      const models = document.createElement("ul");
-      models.className = "service-models";
-      for (const model of service.models) {
-        const item = document.createElement("li");
-        item.className = "service-model";
-        item.textContent = model.id;
-        if (model.displayName) {
-          const displayName = document.createElement("span");
-          displayName.textContent = ` ${model.displayName}`;
-          item.appendChild(displayName);
-        }
-        models.appendChild(item);
-      }
-      card.appendChild(models);
-    }
-    return card;
-  }
-
-  function buildCardButton(text, action, service, extraClass) {
+  function buildServiceEntry(id, name, subtitle) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = extraClass ? `ghost ${extraClass}` : "ghost";
-    button.dataset.action = action;
-    button.dataset.serviceId = service.id;
-    button.textContent = text;
-    if (action === "delete-service" && service.name) {
-      button.setAttribute("aria-label", `删除 ${service.name}`);
-    }
+    button.className = "service-entry";
+    button.dataset.selectService = id;
+    button.setAttribute("aria-controls", "service-detail");
+    button.setAttribute("aria-current", String(editor.selectedServiceId === id));
+    const title = document.createElement("span");
+    title.className = "service-entry-name";
+    title.textContent = name;
+    const hint = document.createElement("span");
+    hint.className = "service-entry-hint";
+    hint.textContent = subtitle;
+    button.append(title, hint);
     return button;
+  }
+
+  function renderServiceDetail() {
+    const service = serviceById(editor.selectedServiceId);
+    const cloud = editor.selectedServiceId === BUILTIN_CLOUD;
+    if (detail.dataset.serviceId !== editor.selectedServiceId) detail.scrollTop = 0;
+    detail.dataset.serviceId = editor.selectedServiceId;
+    document.querySelector("#detail-name").textContent = service ? service.name || "未命名供应方" : cloud ? "Google Cloud Translation" : "谷歌翻译";
+    document.querySelector("#detail-kind").textContent = service ? "自定义供应方" : "内置兜底服务";
+    document.querySelector("#detail-actions").hidden = !service;
+    document.querySelector("#detail-description").textContent = service
+      ? "在此修改密钥和 API 地址；点击编辑维护名称与模型目录。"
+      : "用于网页翻译兜底，在“沉浸式翻译”页选择启用。" + (cloud ? "使用独立的 Cloud Translation API Key，请求可能产生费用。" : "免 Key 接口可能限流、不可访问或失效。");
+    detailApiKey.value = service ? service.apiKey : cloud ? immersiveGoogleApiKey.value : "";
+    detailApiKey.disabled = !service && !cloud;
+    detailApiKey.placeholder = service || cloud ? "填写 API Key" : "无需 API Key";
+    detailBaseUrl.value = service ? service.baseUrl : cloud ? "https://translation.googleapis.com/language/translate/v2" : "https://translate.googleapis.com/translate_a/single";
+    detailBaseUrl.readOnly = !service;
+    document.querySelector("#detail-protocol").value = service ? service.apiProtocol : cloud ? "Google Cloud Translation v2" : "Google Translate";
+    detailFetchModels.hidden = !service;
+    detailFetchModels.disabled = !!editor.detailRequest;
+    renderDetailModels(service);
+    document.querySelector("#detail-model-status").textContent = "";
+  }
+
+  function renderDetailModels(service) {
+    const list = document.querySelector("#detail-models");
+    list.textContent = "";
+    document.querySelector("#detail-model-count").textContent = service ? `(${service.models.length})` : "";
+    for (const model of service?.models || []) {
+      const item = document.createElement("li");
+      item.className = "service-model";
+      const id = document.createElement("span");
+      id.textContent = model.id;
+      const name = document.createElement("span");
+      name.textContent = model.displayName || "—";
+      item.append(id, name);
+      list.appendChild(item);
+    }
+    if (!list.children.length) {
+      const empty = document.createElement("li");
+      empty.className = "model-empty";
+      empty.textContent = service ? "暂无模型，获取模型列表或点击编辑手动添加。" : "此服务无需选择模型。";
+      list.appendChild(empty);
+    }
   }
 
   function renderServiceOptions() {
@@ -441,6 +468,8 @@
 
     const service = serviceId ? serviceById(serviceId) : null;
     editor.editingServiceId = service ? service.id : "";
+    editor.dialogVersion += 1;
+    fetchModels.disabled = false;
     editor.opener = document.activeElement || null;
 
     if (dialogTitle) {
@@ -462,19 +491,26 @@
     }
     setModelStatus("");
     dialog.hidden = false;
+    form.inert = true;
+    document.querySelector(".settings-sidebar").inert = true;
     if (serviceName && typeof serviceName.focus === "function") {
       serviceName.focus();
     }
   }
 
   function closeServiceDialog() {
+    editor.dialogVersion += 1;
+    form.inert = false;
+    document.querySelector(".settings-sidebar").inert = false;
     if (dialog) {
       dialog.hidden = true;
     }
     editor.editingServiceId = "";
     setModelStatus("");
-    if (editor.opener && typeof editor.opener.focus === "function") {
+    if (editor.opener?.isConnected && typeof editor.opener.focus === "function") {
       editor.opener.focus();
+    } else {
+      document.querySelector("#edit-service").focus();
     }
     editor.opener = null;
   }
@@ -552,8 +588,9 @@
       editor.translationServiceId = draft.id;
     }
 
-    renderServiceList();
+    editor.selectedServiceId = draft.id;
     renderServiceOptions();
+    renderServiceList();
     closeServiceDialog();
   }
 
@@ -572,8 +609,9 @@
       editor.immersiveTranslationServiceId = "";
       editor.immersiveTranslationModelId = "";
     }
-    renderServiceList();
     renderServiceOptions();
+    renderServiceList();
+    queryAll("[data-select-service]").find((button) => button.dataset.selectService === editor.selectedServiceId)?.focus();
   }
 
   function nextServiceId() {
@@ -586,6 +624,7 @@
   }
 
   async function fetchServiceModels() {
+    const version = editor.dialogVersion;
     const baseUrl = String((serviceBaseUrl && serviceBaseUrl.value) || "").trim();
     if (!baseUrl) {
       setModelStatus("请先填写 API 地址。");
@@ -607,6 +646,7 @@
         throw new Error(`HTTP ${response.status}`);
       }
       const modelIds = extractModelIds(await response.json());
+      if (version !== editor.dialogVersion) return;
       if (!modelIds.length) {
         setModelStatus("接口没有返回可用的模型，请手工填写模型 id。");
         return;
@@ -629,10 +669,50 @@
       }
       setModelStatus(`接口返回 ${modelIds.length} 个模型，新增 ${added} 个。`);
     } catch (error) {
+      if (version !== editor.dialogVersion) return;
       const reason = error && error.message ? error.message : "请求失败";
       setModelStatus(`获取失败（${reason}），请确认 API 地址与密钥，或手工填写模型 id。`);
     } finally {
-      if (fetchModels) fetchModels.disabled = false;
+      if (version === editor.dialogVersion && fetchModels) fetchModels.disabled = false;
+    }
+  }
+
+  async function fetchDetailModels() {
+    const service = serviceById(editor.selectedServiceId);
+    if (!service || editor.detailRequest) return;
+    const message = document.querySelector("#detail-model-status");
+    if (!service.baseUrl.trim()) {
+      message.textContent = "请先填写 API 地址。";
+      return;
+    }
+    const baseUrl = service.baseUrl;
+    const apiKey = service.apiKey;
+    const controller = new AbortController();
+    editor.detailRequest = controller;
+    const timer = setTimeout(() => controller.abort(), 20000);
+    detailFetchModels.disabled = true;
+    message.textContent = "正在获取可用模型…";
+    const isCurrent = () => serviceById(service.id) === service && editor.selectedServiceId === service.id
+      && service.baseUrl === baseUrl && service.apiKey === apiKey;
+    try {
+      const response = await fetch(Core.buildModelsUrl(baseUrl), {
+        headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {}, signal: controller.signal
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const ids = extractModelIds(await response.json());
+      if (!isCurrent()) return;
+      const known = new Set(service.models.map((model) => model.id));
+      const added = ids.filter((id) => !known.has(id)).map((id) => ({ id, displayName: "" }));
+      service.models.push(...added);
+      renderServiceOptions();
+      renderServiceList();
+      message.textContent = ids.length ? `接口返回 ${ids.length} 个模型，新增 ${added.length} 个。` : "接口没有返回可用模型，请点击编辑手动添加。";
+    } catch (error) {
+      if (isCurrent()) message.textContent = `获取失败（${error.name === "AbortError" ? "请求超时" : error.message}），已保留现有模型。`;
+    } finally {
+      clearTimeout(timer);
+      editor.detailRequest = null;
+      detailFetchModels.disabled = false;
     }
   }
 
@@ -683,17 +763,30 @@
     if (addService) {
       addService.addEventListener("click", () => openServiceDialog(""));
     }
-    if (serviceList) {
-      serviceList.addEventListener("click", (event) => {
-        const button = closest(event.target, "[data-action]");
+    for (const list of [serviceList, priorityServiceList]) {
+      if (!list) continue;
+      list.addEventListener("click", (event) => {
+        const button = closest(event.target, "[data-select-service]");
         if (!button) return;
-        if (button.dataset.action === "edit-service") {
-          openServiceDialog(button.dataset.serviceId);
-        } else if (button.dataset.action === "delete-service") {
-          deleteService(button.dataset.serviceId);
-        }
+        editor.selectedServiceId = button.dataset.selectService;
+        renderServiceList();
       });
     }
+    document.querySelector("#edit-service")?.addEventListener("click", () => openServiceDialog(editor.selectedServiceId));
+    document.querySelector("#delete-service")?.addEventListener("click", () => deleteService(editor.selectedServiceId));
+    detailApiKey?.addEventListener("input", () => {
+      const service = serviceById(editor.selectedServiceId);
+      if (service) service.apiKey = detailApiKey.value.trim();
+      else if (editor.selectedServiceId === BUILTIN_CLOUD) immersiveGoogleApiKey.value = detailApiKey.value;
+    });
+    immersiveGoogleApiKey?.addEventListener("input", () => {
+      if (editor.selectedServiceId === BUILTIN_CLOUD) detailApiKey.value = immersiveGoogleApiKey.value;
+    });
+    detailBaseUrl?.addEventListener("input", () => {
+      const service = serviceById(editor.selectedServiceId);
+      if (service) service.baseUrl = detailBaseUrl.value.trim();
+    });
+    detailFetchModels?.addEventListener("click", fetchDetailModels);
     if (serviceModels) {
       serviceModels.addEventListener("click", (event) => {
         const button = closest(event.target, '[data-action="remove-model"]');
@@ -725,6 +818,17 @@
         if (event.key === "Escape") {
           event.preventDefault();
           closeServiceDialog();
+        } else if (event.key === "Tab") {
+          const fields = queryAll("button:not(:disabled), input, select", dialog);
+          const first = fields[0];
+          const last = fields[fields.length - 1];
+          if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+          }
         }
       });
     }
@@ -734,6 +838,7 @@
         editor.translationServiceId = translationServiceSelect.value;
         editor.translationModelId = "";
         renderModelOptions();
+        renderServiceList();
       });
     }
     if (translationModelSelect) {
@@ -746,6 +851,7 @@
         editor.immersiveTranslationServiceId = immersiveServiceSelect.value;
         editor.immersiveTranslationModelId = "";
         renderModelOptions();
+        renderServiceList();
       });
     }
     if (immersiveModelSelect) {

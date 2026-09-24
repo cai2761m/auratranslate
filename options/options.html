@@ -51,20 +51,36 @@
                 <p>添加自定义供应方并维护它的模型目录；“实时字幕”和“沉浸式翻译”页只从这里挑选服务与模型。</p>
               </div>
 
-              <div class="service-list" id="custom-service-list"></div>
-              <p class="service-empty" id="custom-service-empty">还没有自定义供应方，点击下面的按钮添加第一个。</p>
-              <div class="inline-actions">
-                <button type="button" id="add-service">添加自定义供应方</button>
-              </div>
-
-              <div class="subsection">
-                <h3>其他翻译服务</h3>
-                <article class="service-card is-builtin">
-                  <div class="service-card-head">
-                    <h4 class="service-name">谷歌翻译</h4>
-                    <span class="service-tag">免 Key</span>
+              <div class="services-workspace">
+                <aside class="services-sidebar" aria-label="翻译服务列表">
+                  <div class="services-scroll">
+                    <div class="service-group">
+                      <h3>默认与兜底</h3>
+                      <div class="service-list" id="priority-service-list"></div>
+                    </div>
+                    <div class="service-group">
+                      <h3>其他翻译服务</h3>
+                      <div class="service-list" id="custom-service-list"></div>
+                      <p class="service-empty" id="custom-service-empty">暂无其他供应方</p>
+                    </div>
                   </div>
-                  <p class="service-desc"><span class="service-desc-label">描述</span><span>免 Key 接口，可能限流、不可访问或失效。作为网页翻译兜底使用，请在“沉浸式翻译”页开启。</span></p>
+                  <div class="services-add"><button type="button" id="add-service">＋ 添加自定义供应方</button></div>
+                </aside>
+                <article class="service-detail" id="service-detail" aria-labelledby="detail-name">
+                  <div class="service-detail-head">
+                    <div><p class="section-kicker" id="detail-kind"></p><h3 id="detail-name"></h3></div>
+                    <div class="service-actions" id="detail-actions">
+                      <button type="button" id="edit-service" class="ghost">编辑</button>
+                      <button type="button" id="delete-service" class="ghost danger">删除</button>
+                    </div>
+                  </div>
+                  <p class="detail-description" id="detail-description"></p>
+                  <label class="field"><span>API Key</span><input id="detail-api-key" type="password" autocomplete="off"></label>
+                  <label class="field"><span>API 地址</span><input id="detail-base-url" type="url" autocomplete="off" placeholder="https://api.example.com/v1"></label>
+                  <label class="field"><span>API 协议</span><input id="detail-protocol" type="text" readonly></label>
+                  <div class="model-catalog-heading"><h4>模型列表 <span id="detail-model-count"></span></h4><button type="button" id="detail-fetch-models" class="ghost">获取模型列表</button></div>
+                  <ul class="detail-models" id="detail-models"></ul>
+                  <p class="model-status" id="detail-model-status" role="status"></p>
                 </article>
               </div>
             </section>
@@ -246,11 +262,10 @@
               </label>
 
               <div class="field">
-                <span>模型目录</span>
+                <div class="model-catalog-heading"><span>模型目录</span><button type="button" id="fetch-models" class="secondary">获取可用模型</button></div>
                 <div class="model-rows" id="service-models"></div>
                 <div class="inline-actions">
                   <button type="button" id="add-model-row" class="secondary">添加</button>
-                  <button type="button" id="fetch-models" class="secondary">获取可用模型</button>
                 </div>
                 <small id="service-models-status" role="status"></small>
               </div>
@@ -259,6 +274,7 @@
                 <button type="button" id="cancel-service" class="secondary">取消</button>
                 <button type="button" id="save-service">保存</button>
               </div>
+              <p class="dialog-save-hint">保存后，点击页面“保存设置”应用更改。</p>
             </div>
           </div>
         </div>
