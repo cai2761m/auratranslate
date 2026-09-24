@@ -71,7 +71,7 @@ Click **保存设置** (Save settings). The extension does not include an API ke
 
 **Google Drive:** open a video that exposes a transcript. AuraTranslate briefly opens the transcript panel to read timestamped text, restores the panel, and displays bilingual subtitles inside the embedded player.
 
-**Webpages:** open a page with readable English text and click the floating translation button on the right. Translations appear below the original text, with content near the viewport prioritized. Once translation finishes, click the button to hide or show translations. Drag the button vertically to reposition it.
+**Webpages:** open a page with readable English text and click the floating translation button on the right. Translations appear below the original text, with content near the viewport prioritized. Progress never pops up on its own while translating — hover the floating button to see it. Once translation finishes, click the button to hide or show translations. Drag the button vertically to reposition it.
 
 ## Subtitle settings
 

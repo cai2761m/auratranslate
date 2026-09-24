@@ -134,10 +134,11 @@ test("semantic outlines and admonitions support nested lists without duplicate b
   assert.equal(document.querySelectorAll("nav a > [data-ytbt-state='done']").length, 2);
 });
 
-async function waitUntil(predicate) {
-  for (let turn = 0; turn < 100; turn += 1) {
+async function waitUntil(predicate, options = {}) {
+  const turns = options.turns ?? 100;
+  for (let turn = 0; turn < turns; turn += 1) {
     if (predicate()) return;
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => options.delayMs ? setTimeout(resolve, options.delayMs) : setImmediate(resolve));
   }
   assert.fail("Expected async progress did not occur");
 }
@@ -557,6 +558,136 @@ test("formatting copies no active source attributes and keeps code-like HTML ine
   assert.equal(translation.querySelector("code").textContent, "<img src=x onerror=alert(1)>");
   assert.equal(translation.querySelector("a").hasAttribute("href"), false);
   assert.equal(translation.querySelector("img, [onerror], [onclick]"), null);
+});
+
+// The floating control must never push translation progress on screen on its
+// own; hovering it (or the open panel) is the only thing that reveals it.
+function createControlFixture(t, html) {
+  const dom = new JSDOM(html, { url: "https://docs.flutter.dev/install/quick", runScripts: "outside-only", pretendToBeVisual: true });
+  t.after(() => dom.window.close());
+  const { window } = dom;
+  const requests = [];
+  const pending = [];
+  // jsdom has no layout engine; model visibility the same way translatePage does.
+  window.HTMLElement.prototype.getBoundingClientRect = function () {
+    const hidden = this.closest("[hidden], [style*='display: none']");
+    return { width: hidden ? 0 : 400, height: hidden ? 0 : 30, top: 0, bottom: 30 };
+  };
+  const getComputedStyle = window.getComputedStyle.bind(window);
+  window.getComputedStyle = (element) => {
+    const style = getComputedStyle(element);
+    return { display: style.display, visibility: style.visibility, opacity: style.opacity || "1", getPropertyValue: style.getPropertyValue.bind(style) };
+  };
+  window.chrome = {
+    runtime: {},
+    storage: { local: { get: (defaults, callback) => callback(defaults), set: (_, callback) => callback() } }
+  };
+  window.eval(sharedScript);
+  window.YTBTCore = {
+    ...window.YTBTCore,
+    sendRuntimeMessage(_runtime, message) {
+      requests.push(message);
+      if (message.cacheOnly) return Promise.resolve({ ok: true, items: [] });
+      return new Promise((resolve, reject) => pending.push({ message, resolve, reject }));
+    }
+  };
+  window.eval(immersiveScript);
+  return { window, document: window.document, requests, pending };
+}
+
+test("translation progress stays hidden until the pointer is on the floating control", async (t) => {
+  const { window, document, pending } = createControlFixture(t, `<main>${paragraphs(8)}</main>`);
+  const ball = document.querySelector(".ytbt-immersive-tab");
+  const panel = document.querySelector(".ytbt-immersive-panel");
+
+  ball.click();
+  // One 4-block first batch plus the remaining 4 blocks in a second batch.
+  await waitUntil(() => pending.length === 2 && panel.textContent);
+  assert.equal(ball.dataset.ytbtState, "translating");
+  assert.equal(panel.hidden, true, "progress must not pop up on its own while translating");
+  assert.match(panel.textContent, /Translating 0\/8 blocks/);
+  assert.equal(document.body.contains(panel), true);
+
+  // jsdom cannot synthesize hover, so model the pointer entering the control.
+  ball.dispatchEvent(new window.Event("pointerenter"));
+  assert.equal(panel.hidden, false, "hovering the control reveals progress");
+  assert.match(panel.textContent, /Translating 0\/8 blocks/);
+
+  pending.forEach(({ message, resolve }) => resolve(translatedResponse(message)));
+  await waitUntil(() => ball.dataset.ytbtState === "done" && /Done\b/.test(panel.textContent));
+  assert.equal(panel.hidden, false, "the panel stays open for the pointer already on it");
+  assert.match(panel.textContent, /Done\. Added 8 bilingual translations/);
+
+  ball.dispatchEvent(new window.Event("pointerleave"));
+  assert.equal(panel.hidden, true, "leaving the control hides the panel again");
+});
+
+test("errors and notices stay reachable by hover instead of popping up", async (t) => {
+  const { window, document, pending } = createControlFixture(t, `<main>${paragraphs(8)}</main>`);
+  const ball = document.querySelector(".ytbt-immersive-tab");
+  const panel = document.querySelector(".ytbt-immersive-panel");
+
+  // Reject synchronously so the failure is fully settled when the run stops.
+  window.YTBTCore.sendRuntimeMessage = (_runtime, message) => {
+    if (message.cacheOnly) return Promise.resolve({ ok: true, items: [] });
+    return Promise.resolve({ ok: false, errors: [{ message: "Provider unavailable" }] });
+  };
+
+  ball.click();
+  await waitUntil(() => ball.dataset.ytbtState === "error");
+  await waitUntil(() => /翻译暂停/.test(panel.textContent));
+
+  assert.equal(panel.hidden, true, "a failure must not pop a panel over the page text");
+  assert.match(panel.textContent, /Provider unavailable/);
+
+  ball.dispatchEvent(new window.Event("pointerenter"));
+  assert.equal(panel.hidden, false);
+  assert.match(panel.textContent, /翻译暂停/);
+  ball.dispatchEvent(new window.Event("pointerleave"));
+  assert.equal(panel.hidden, true);
+});
+
+test("a toggle notice is a hover-only toast, not a permanent panel", async (t) => {
+  const { window, document } = createControlFixture(t, `<main>${paragraphs(8)}</main>`);
+
+  // Serve every block from cache so the first click reaches the done state.
+  window.YTBTCore.sendRuntimeMessage = (_runtime, message) =>
+    Promise.resolve(translatedResponse(message));
+
+  const ball = document.querySelector(".ytbt-immersive-tab");
+  const panel = document.querySelector(".ytbt-immersive-panel");
+
+  ball.click();
+  await waitUntil(() => ball.dataset.ytbtState === "done");
+
+  ball.click();
+  await waitUntil(() => /Bilingual translations hidden/.test(panel.textContent));
+  assert.equal(panel.hidden, true, "click notices are hover-only too");
+
+  ball.dispatchEvent(new window.Event("pointerenter"));
+  assert.equal(panel.hidden, false);
+  assert.match(panel.textContent, /Bilingual translations hidden/);
+
+  // The notice is transient: it expires by itself even without hovering.
+  await new Promise((resolve) => window.setTimeout(resolve, 3700));
+  assert.equal(panel.textContent, "");
+  assert.equal(panel.hidden, true);
+});
+
+test("SPA navigation clears the stored status so a stale message cannot resurface", async (t) => {
+  const { window, document, pending } = createControlFixture(t, `<main>${paragraphs(8)}</main>`);
+  const ball = document.querySelector(".ytbt-immersive-tab");
+  const panel = document.querySelector(".ytbt-immersive-panel");
+
+  ball.click();
+  await waitUntil(() => pending.length === 2 && /Translating/.test(panel.textContent));
+
+  window.history.pushState({}, "", "/new-article");
+  // SPA navigation is detected by a one-second identity poll, so allow real time.
+  await waitUntil(() => ball.dataset.ytbtState === "idle" && !panel.textContent, { turns: 200, delayMs: 20 });
+  assert.equal(panel.hidden, true);
+  ball.dispatchEvent(new window.Event("pointerenter"));
+  assert.equal(panel.hidden, true, "no progress from the previous page may come back");
 });
 
 test("legacy code matching handles overlapping identifiers without styling substrings", async (t) => {

@@ -250,6 +250,11 @@
     ballText: null,
     panel: null,
     panelTimer: null,
+    panelStatusText: "",
+    panelStatusPersistent: false,
+    // Progress stays hidden while translating: the panel only appears when the
+    // pointer is on the floating control (or the open panel itself).
+    pointerOverControl: false,
     mode: "idle",
     visible: true,
     translated: false,
@@ -326,6 +331,10 @@
 
     ballContainer.addEventListener("pointerdown", handleBallPointerDown, true);
     ballContainer.addEventListener("click", handleBallClick);
+    ballContainer.addEventListener("pointerenter", handleControlPointerEnter);
+    ballContainer.addEventListener("pointerleave", handleControlPointerLeave);
+    panel.addEventListener("pointerenter", handleControlPointerEnter);
+    panel.addEventListener("pointerleave", handleControlPointerLeave);
     document.body.appendChild(ballContainer);
     document.body.appendChild(panel);
 
@@ -334,6 +343,16 @@
     state.panel = panel;
     loadBallPosition();
     updateBallMode("idle");
+  }
+
+  function handleControlPointerEnter() {
+    state.pointerOverControl = true;
+    syncPanel();
+  }
+
+  function handleControlPointerLeave() {
+    state.pointerOverControl = false;
+    syncPanel();
   }
 
   async function handleBallClick(event) {
@@ -524,7 +543,7 @@
     state.translated = false;
     clearExistingTranslations();
     updateBallMode("idle");
-    if (state.panel) state.panel.hidden = true;
+    showStatus(null);
     window.dispatchEvent(new Event("ytbt-page-changed"));
   }
 
@@ -618,6 +637,9 @@
     }
 
     const token = (state.runToken += 1);
+    // A superseded run must not write progress onto the new page's control.
+    state.panelStatusText = "";
+    state.panelStatusPersistent = false;
     state.translated = false;
     state.visible = true;
     document.documentElement.classList.remove("ytbt-immersive-hidden");
@@ -631,6 +653,9 @@
     let translatedCount = 0;
     try {
       const applyItems = (batch, items) => {
+        // Navigation can invalidate the run while a response is in flight; a
+        // stale progress write would otherwise resurface on the new page.
+        if (!isCurrentRun(token, pageUrl)) return [];
         const translatedById = new Map(items.filter((item) => item && item.translatedText)
           .map((item) => [String(item.id), Core.normalizeSubtitleText(item.translatedText)]));
         const missing = [];
@@ -1219,25 +1244,43 @@
     state.ball.dataset.ytbtState = mode;
   }
 
+  // The panel is a hover surface: translation progress is recorded here but is
+  // never pushed on screen on its own. Only the pointer over the floating
+  // control opens it, so reading the page stays unobstructed while the
+  // background work runs.
   function showStatus(message, persistent) {
-    if (!state.panel) {
-      return;
-    }
-
-    state.panel.textContent = message;
-    state.panel.hidden = false;
-
     if (state.panelTimer) {
       clearTimeout(state.panelTimer);
       state.panelTimer = null;
     }
 
-    if (!persistent) {
+    state.panelStatusText = message || "";
+    state.panelStatusPersistent = Boolean(persistent) && Boolean(state.panelStatusText);
+
+    if (state.panelStatusText && !state.panelStatusPersistent) {
       state.panelTimer = setTimeout(() => {
-        if (state.panel) {
-          state.panel.hidden = true;
-        }
+        state.panelTimer = null;
+        state.panelStatusText = "";
+        state.panelStatusPersistent = false;
+        syncPanel();
       }, 3600);
     }
+
+    syncPanel();
+  }
+
+  function syncPanel() {
+    const panel = state.panel;
+    if (!panel) {
+      return;
+    }
+
+    const text = state.panelStatusText;
+    // Mirror the stored status exactly: a cleared status must not leave the
+    // previous message behind for the next hover to reveal.
+    if (panel.textContent !== text) {
+      panel.textContent = text;
+    }
+    panel.hidden = !text || !state.pointerOverControl;
   }
 })();
