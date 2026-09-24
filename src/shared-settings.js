@@ -136,27 +136,8 @@
     return `ytbt:${fingerprintText(safeParts.join("|"))}`;
   }
 
-  function normalizeOpenAiCompatibleBaseUrl(baseUrl) {
-    const raw = String(baseUrl || "").trim().replace(/\/+$/, "");
-    if (!raw) return "";
-
-    // ZayuAPI serves its website at the host root; API routes live under /v1.
-    // Without this prefix, /chat/completions returns the HTML landing page with
-    // HTTP 200, which looks like a successful request until JSON parsing fails.
-    try {
-      const url = new URL(raw);
-      if (/(^|\.)zayuapi\.com$/i.test(url.hostname) && (!url.pathname || url.pathname === "/")) {
-        url.pathname = "/v1";
-        return url.toString().replace(/\/$/, "");
-      }
-    } catch (error) {
-      // Keep accepting provider URLs in the same permissive way as before.
-    }
-    return raw;
-  }
-
   function buildChatCompletionsUrl(baseUrl) {
-    const raw = normalizeOpenAiCompatibleBaseUrl(baseUrl);
+    const raw = String(baseUrl || "").trim();
     if (!raw) {
       return "";
     }
@@ -255,7 +236,7 @@
   }
 
   function buildModelsUrl(baseUrl) {
-    const raw = normalizeOpenAiCompatibleBaseUrl(baseUrl);
+    const raw = String(baseUrl || "").trim();
     if (!raw) return "";
     return `${raw.replace(/\/+$/, "").replace(/\/chat\/completions$/i, "")}/models`;
   }
