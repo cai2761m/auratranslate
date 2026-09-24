@@ -693,6 +693,21 @@ test("buildChatCompletionsUrl accepts full endpoint URLs", () => {
   );
 });
 
+test("ZayuAPI host roots are routed through its OpenAI-compatible v1 API", () => {
+  assert.equal(
+    Core.buildChatCompletionsUrl("https://st.zayuapi.com"),
+    "https://st.zayuapi.com/v1/chat/completions"
+  );
+  assert.equal(
+    Core.buildModelsUrl("https://st.zayuapi.com"),
+    "https://st.zayuapi.com/v1/models"
+  );
+  assert.equal(
+    Core.buildChatCompletionsUrl("https://st.zayuapi.com/v1"),
+    "https://st.zayuapi.com/v1/chat/completions"
+  );
+});
+
 test("buildGeminiGenerateContentUrl accepts plain and prefixed model names", () => {
   assert.equal(
     Core.buildGeminiGenerateContentUrl(Core.GEMINI_BASE_URL, "gemini-3.5-flash"),
