@@ -2,7 +2,6 @@
   "use strict";
 
   const DEFAULT_SETTINGS = Object.freeze({
-    deepseekApiKey: "",
     translationProvider: "deepseek",
     translationApiKey: "",
     translationBaseUrl: "",
@@ -29,6 +28,8 @@
     translationCacheMaxItems: 2000
   });
 
+  // Legacy provider defaults remain available to resolve settings saved by
+  // older versions; the current settings UI exposes a generic compatible API.
   const DEEPSEEK_MODEL = "deepseek-v4-flash";
   const FONT_SCALE_MIN = 0.3;
   const FONT_SCALE_MAX = 3;

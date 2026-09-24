@@ -158,7 +158,6 @@
       translationBaseUrl: realtime.baseUrl,
       translationModel: realtime.model,
       translationJsonResponse: realtime.jsonResponse,
-      deepseekApiKey: "",
       immersiveTranslationProvider: immersive.provider,
       immersiveTranslationApiKey: useDedicatedImmersiveApi ? immersive.apiKey : "",
       immersiveTranslationBaseUrl: useDedicatedImmersiveApi ? immersive.baseUrl : "",
@@ -176,6 +175,7 @@
       subtitleTranslationMode: readValue(subtitleTranslationMode, "economy") === "full" ? "full" : "economy",
       subtitleLookAheadMinutes: Number(readValue(subtitleLookAheadMinutes, "2"))
     });
+    await storageRemove("deepseekApiKey");
     showStatus("设置已保存。");
   }
 
