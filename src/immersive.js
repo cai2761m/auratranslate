@@ -695,6 +695,7 @@
       for (const block of blocks) {
         if (block.container && block.container.dataset.ytbtState === "loading") {
           block.container.dataset.ytbtState = "paused";
+          block.container.removeAttribute("aria-busy");
           block.container.hidden = true;
         }
       }
@@ -1072,10 +1073,15 @@
     container.dataset.ytbtImmersiveTranslation = "true";
     container.dataset.ytbtImmersiveFor = block.id;
     container.dataset.ytbtState = "loading";
+    container.setAttribute("aria-busy", "true");
 
     const text = document.createElement("span");
     text.className = "ytbt-immersive-text";
-    text.textContent = "Translating...";
+    const spinner = document.createElement("span");
+    spinner.className = "ytbt-immersive-spinner";
+    spinner.setAttribute("role", "status");
+    spinner.setAttribute("aria-label", "正在翻译");
+    text.appendChild(spinner);
 
     container.appendChild(text);
     block.element.appendChild(container);
@@ -1094,6 +1100,7 @@
       text.replaceChildren(renderInlineTranslation(block, translatedText));
     }
     container.dataset.ytbtState = "done";
+    container.removeAttribute("aria-busy");
   }
 
   function renderTranslationError(block, message) {
@@ -1106,6 +1113,7 @@
       text.textContent = message || "Translation failed.";
     }
     container.dataset.ytbtState = "error";
+    container.removeAttribute("aria-busy");
   }
 
   function viewportDistance(block) {
