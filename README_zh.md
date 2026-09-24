@@ -167,7 +167,12 @@ Windows 下如果 PowerShell 阻止执行 `npm.ps1`，改用 `npm.cmd ci` 和 `n
 manifest.json       扩展信息、权限与入口
 src/
   background.js     API 请求、缓存持久化与消息分发
-  content.js        视频字幕、播放调度与字幕叠加层
+  content-core.js   内容脚本常量、共享状态与工具函数
+  content-captions.js     字幕轨道发现、抓取与预翻译缓存
+  content-translation.js  翻译队列、批量调度与 API 退避
+  content-player.js       播放器跟踪与原生字幕遮挡
+  content-overlay.js      字幕叠加层渲染与拖拽
+  content-main.js   设置绑定、播放器消息与启动引导
   drive.js          Drive 转写稿读取与内嵌播放器通信
   immersive.js      网页提取、翻译调度与译文显示
   shared.js         默认设置、字幕工具与 API 配置

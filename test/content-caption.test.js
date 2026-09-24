@@ -6,6 +6,15 @@ const vm = require("node:vm");
 
 const Core = require("../src/shared.js");
 
+function contentScriptSource() {
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "../manifest.json"), "utf8"));
+  const entry = manifest.content_scripts.find((candidate) => (candidate.js || []).includes("src/content-core.js"));
+  return entry.js
+    .filter((file) => file.startsWith("src/content-"))
+    .map((file) => fs.readFileSync(path.join(__dirname, "..", file), "utf8"))
+    .join("\n");
+}
+
 function loadCaptionApi(fetchImpl) {
   const rootClasses = new Set();
   const document = {
@@ -59,27 +68,23 @@ function loadCaptionApi(fetchImpl) {
     window
   });
 
-  let source = fs.readFileSync(path.join(__dirname, "../src/content.js"), "utf8");
+  let source = contentScriptSource();
   source = source.replace(
-    /\r?\n  if \(!IS_DRIVE_PLAYER\) \{\r?\n    bindPageMessages\(\);\r?\n    injectPageBridge\(\);\r?\n  \}\r?\n  init\(\);/,
-    "\n  // Initialization is omitted by these isolated caption tests."
+    /if \(!IS_DRIVE_PLAYER\) \{\n  bindPageMessages\(\);\n  injectPageBridge\(\);\n\}\ninit\(\);\n?$/,
+    "// Initialization is omitted by these isolated caption tests.\n"
   );
-  source = source.replace(
-    /\n\}\)\(\);\s*$/,
-    [
-      "",
-      "  globalThis.__YTBTCaptionTest = {",
-      "    state,",
-      "    handlePlayerResponse,",
-      "    fetchCaptionTrack,",
-      "    fetchTranscriptPanelTrack,",
-      "    transcriptPanelParams,",
-      "    parseCapturedCaptionText,",
-      "    applySettings",
-      "  };",
-      "})();"
-    ].join("\n")
-  );
+  assert.match(source, /Initialization is omitted by these isolated caption tests/);
+  source += `
+globalThis.__YTBTCaptionTest = {
+  state,
+  handlePlayerResponse,
+  fetchCaptionTrack,
+  fetchTranscriptPanelTrack,
+  transcriptPanelParams,
+  parseCapturedCaptionText,
+  applySettings
+};
+`;
   vm.runInContext(source, context);
   return { api: context.__YTBTCaptionTest, rootClasses };
 }

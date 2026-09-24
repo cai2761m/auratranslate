@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AuraTranslate",
-  "version": "0.3.13",
+  "version": "0.3.14",
   "description": "AuraTranslate - AI bilingual subtitles and immersive webpage translation on desktop and Android Firefox",
   "browser_specific_settings": {
     "gecko": {
@@ -31,13 +31,13 @@
   "content_scripts": [
     {
       "matches": ["https://www.youtube.com/*", "https://m.youtube.com/*"],
-      "js": ["src/shared.js", "src/content.js"],
+      "js": ["src/shared.js", "src/content-core.js", "src/content-captions.js", "src/content-translation.js", "src/content-player.js", "src/content-overlay.js", "src/content-main.js"],
       "css": ["src/overlay.css"],
       "run_at": "document_start"
     },
     {
       "matches": ["https://youtube.googleapis.com/embed/*"],
-      "js": ["src/shared.js", "src/content.js"],
+      "js": ["src/shared.js", "src/content-core.js", "src/content-captions.js", "src/content-translation.js", "src/content-player.js", "src/content-overlay.js", "src/content-main.js"],
       "css": ["src/overlay.css"],
       "run_at": "document_start",
       "all_frames": true

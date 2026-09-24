@@ -167,7 +167,12 @@ The test suite covers caption parsing, configuration persistence, sentence segme
 manifest.json       Extension metadata, permissions, and entry points
 src/
   background.js     API requests, cache persistence, and message routing
-  content.js        Video captions, playback scheduling, and subtitle overlay
+  content-core.js   Content-script constants, shared state, and helpers
+  content-captions.js     Caption discovery, fetching, and prepared-cue cache
+  content-translation.js  Translation queue, batching, and API backoff
+  content-player.js       Player tracking and native caption blocking
+  content-overlay.js      Subtitle overlay rendering and dragging
+  content-main.js   Settings wiring, player messages, and bootstrap
   drive.js          Drive transcript extraction and embedded-player bridge
   immersive.js      Webpage extraction, translation scheduling, and rendering
   shared.js         Settings, caption utilities, and API configuration

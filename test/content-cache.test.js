@@ -87,6 +87,15 @@ function translationKey(message, cue, settings) {
   ]);
 }
 
+function contentScriptSource() {
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "../manifest.json"), "utf8"));
+  const entry = manifest.content_scripts.find((candidate) => (candidate.js || []).includes("src/content-core.js"));
+  return entry.js
+    .filter((file) => file.startsWith("src/content-"))
+    .map((file) => fs.readFileSync(path.join(__dirname, "..", file), "utf8"))
+    .join("\n");
+}
+
 function loadContent(storage, translations, options = {}) {
   const calls = { fetch: [], segmentation: [], cacheOnly: [], paid: [], errors: [] };
   const window = {
@@ -178,19 +187,19 @@ function loadContent(storage, translations, options = {}) {
       }
     }]))
   };
-  let source = fs.readFileSync(path.join(__dirname, "../src/content.js"), "utf8");
+  let source = contentScriptSource();
   source = source.replace(
-    /\r?\n  if \(!IS_DRIVE_PLAYER\) \{\r?\n    bindPageMessages\(\);\r?\n    injectPageBridge\(\);\r?\n  \}\r?\n  init\(\);/,
-    "\n  // Tests initialize explicit state in a fresh page context."
+    /if \(!IS_DRIVE_PLAYER\) \{\n  bindPageMessages\(\);\n  injectPageBridge\(\);\n\}\ninit\(\);\n?$/,
+    "// Tests initialize explicit state in a fresh page context.\n"
   );
-  source = source.replace(/\r?\n  init\(\);/, "\n  // Tests initialize explicit state in a fresh page context.");
-  source = source.replace(/\n\}\)\(\);\s*$/, `
-  globalThis.__cacheTest = {
-    state, prepareCaptionCues, handlePlayerResponse, handleDriveTranscript,
-    makeStableTrackFingerprint, resetVideoState, bindStorageChanges, handleSeek,
-    scheduleTranslations, makeIncrementalCaptionCues, validPreparedCaptionCache
-  };
-})();`);
+  assert.match(source, /Tests initialize explicit state in a fresh page context/);
+  source += `
+globalThis.__cacheTest = {
+  state, prepareCaptionCues, handlePlayerResponse, handleDriveTranscript,
+  makeStableTrackFingerprint, resetVideoState, bindStorageChanges, handleSeek,
+  scheduleTranslations, makeIncrementalCaptionCues, validPreparedCaptionCache
+};
+`;
   vm.runInContext(source, context);
   api = context.__cacheTest;
   api.state.settingsLoaded = true;

@@ -6,6 +6,15 @@ const vm = require("node:vm");
 
 const Core = require("../src/shared.js");
 
+function contentScriptSource() {
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "../manifest.json"), "utf8"));
+  const entry = manifest.content_scripts.find((candidate) => (candidate.js || []).includes("src/content-core.js"));
+  return entry.js
+    .filter((file) => file.startsWith("src/content-"))
+    .map((file) => fs.readFileSync(path.join(__dirname, "..", file), "utf8"))
+    .join("\n");
+}
+
 function createDragHarness({ mobile = false } = {}) {
   const documentListeners = new Map();
   const windowListeners = new Map();
@@ -147,25 +156,24 @@ function createDragHarness({ mobile = false } = {}) {
     YTBTCore: Core
   });
 
-  let source = fs.readFileSync(path.join(__dirname, "../src/content.js"), "utf8");
-  source = source.replace("\n  init();", "\n  // Initialization is omitted by this isolated interaction test.");
+  let source = contentScriptSource();
   source = source.replace(
-    /\n\}\)\(\);\s*$/,
-    [
-      "",
-      "  globalThis.__YTBTDragTest = {",
-      "    state,",
-      "    normalizeSettings, applySettings,",
-      "    bindOverlayDragHandlers,",
-      "    ensureOverlay,",
-      "    applyOverlayPosition,",
-      "    beginRelayedOverlayDrag,",
-      "    moveRelayedOverlayDrag,",
-      "    endRelayedOverlayDrag",
-      "  };",
-      "})();"
-    ].join("\n")
+    /\ninit\(\);\n?$/,
+    "\n// Initialization is omitted by this isolated interaction test.\n"
   );
+  assert.match(source, /Initialization is omitted by this isolated interaction test/);
+  source += `
+globalThis.__YTBTDragTest = {
+  state,
+  normalizeSettings, applySettings,
+  bindOverlayDragHandlers,
+  ensureOverlay,
+  applyOverlayPosition,
+  beginRelayedOverlayDrag,
+  moveRelayedOverlayDrag,
+  endRelayedOverlayDrag
+};
+`;
   vm.runInContext(source, context);
 
   const api = context.__YTBTDragTest;
