@@ -501,7 +501,9 @@ async function handleImmersiveTranslate(message) {
   }
 
   if (message.cacheOnly !== true && missing.length) {
-    if (!translationConfig.apiKey || !endpointUrl || !translationConfig.model) {
+    const fallbackProvider = ["google-free", "google-cloud"].includes(settings.immersiveFallbackProvider)
+      ? settings.immersiveFallbackProvider : "off";
+    if (fallbackProvider === "off" && (!translationConfig.apiKey || !endpointUrl || !translationConfig.model)) {
       throw new Error(`${translationConfig.providerLabel} ${!translationConfig.apiKey ? "API Key" : "base URL or model"} is not configured.`);
     }
     const translatedItems = await translateMissingCues({
@@ -509,12 +511,15 @@ async function handleImmersiveTranslate(message) {
       asrCorrectionEnabled: false,
       cues: missing,
       mode: "immersive",
+      translateCues: fallbackProvider === "off" ? undefined : (request, retain) =>
+        translateImmersiveWithFallback(request, settings, retain),
       async persistItems(items) {
         const newItems = {};
         for (const item of items) {
           const cue = uniqueCues.get(String(item.id));
           if (cue && item.translatedText) {
-            newItems[cue.id] = { sourceText: cue.sourceText, translatedText: item.translatedText };
+            newItems[cue.id] = { sourceText: cue.sourceText, translatedText: item.translatedText,
+              translationProvider: item.translationProvider || translationConfig.provider };
           }
         }
         const maxItems = Number(settings.translationCacheMaxItems) || Core.DEFAULT_CACHE_MAX_ITEMS;
@@ -544,6 +549,160 @@ async function immersiveFingerprint(value) {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+// Fallback is opt-in and belongs inside in-flight deduplication. Storage errors
+// must never be mistaken for provider failures and trigger another paid call.
+async function translateImmersiveWithFallback(request, settings, retain) {
+  let items = [];
+  let primaryError;
+  const config = request.translationConfig;
+  const endpoint = config.apiStyle === "gemini" ? config.generateContentUrl : config.chatCompletionsUrl;
+  if (config.apiKey && endpoint && config.model) {
+    try {
+      // Switch provider after one attempt; do not replay the original AI call.
+      items = await translateBatch(request);
+    } catch (error) {
+      primaryError = error;
+    }
+  }
+  const translatedIds = new Set(items.map((item) => String(item.id)));
+  const missing = request.cues.filter((cue) => !translatedIds.has(String(cue.id)));
+  if (!missing.length) return items;
+  if (items.length) await retain(items);
+  const deadline = Date.now() + 45000;
+  for (const cue of missing) {
+    let translatedText;
+    try {
+      translatedText = await translateGoogleCue(cue.sourceText, request, settings, deadline);
+    } catch (error) {
+      // Earlier successes are already cached. Return them so the page can render
+      // partial progress; a subsequent click only requests missing paragraphs.
+      if (items.length) return items;
+      const failure = new Error(`${primaryError ? `主接口失败：${primaryError.message}；` : ""}Google 兜底失败：${error.message}`);
+      failure.requestMayHaveReachedProvider = Boolean(primaryError?.requestMayHaveReachedProvider || error.requestMayHaveReachedProvider);
+      throw failure;
+    }
+    const item = { id: cue.id, translatedText, translationProvider: settings.immersiveFallbackProvider };
+    await retain([item]);
+    items.push(item);
+  }
+  return items;
+}
+
+// Keep formatting markers and code local. Google receives only translatable
+// text spans; its output is rendered by the existing safe text/marker renderer.
+function googleTextParts(text) {
+  const parts = [];
+  const protectedTags = [];
+  for (const token of String(text).split(/(\[\[\/?YTBT_[A-Z]+_\d+\]\])/g)) {
+    const marker = token.match(/^\[\[(\/?)YTBT_([A-Z]+)_\d+\]\]$/);
+    if (marker) {
+      if (["CODE", "KBD", "SAMP"].includes(marker[2])) {
+        if (marker[1]) protectedTags.pop();
+        else protectedTags.push(marker[2]);
+      }
+      parts.push({ text: token });
+    } else if (protectedTags.length || !token.trim()) {
+      parts.push({ text: token });
+    } else {
+      // Code points avoid splitting surrogate pairs. Prefer a word boundary.
+      const points = Array.from(token);
+      while (points.length) {
+        let end = Math.min(points.length, 1000);
+        if (end < points.length) {
+          for (let i = end - 1; i > end / 2; i--) {
+            if (/\s/.test(points[i])) { end = i + 1; break; }
+          }
+        }
+        const chunk = points.splice(0, end).join("");
+        const match = chunk.match(/^(\s*)([\s\S]*?)(\s*)$/);
+        parts.push({ text: match[2], translate: Boolean(match[2]), before: match[1], after: match[3] });
+      }
+    }
+  }
+  return parts;
+}
+
+let googleActiveRequests = 0;
+const googleRequestWaiters = [];
+let googleFreeCooldownUntil = 0;
+
+async function withGoogleSlot(work) {
+  if (googleActiveRequests >= 2) await new Promise((resolve) => googleRequestWaiters.push(resolve));
+  else googleActiveRequests += 1;
+  try { return await work(); }
+  finally {
+    const next = googleRequestWaiters.shift();
+    if (next) next();
+    else googleActiveRequests -= 1;
+  }
+}
+
+async function translateGoogleCue(text, request, settings, deadline) {
+  const cloud = settings.immersiveFallbackProvider === "google-cloud";
+  const apiKey = String(settings.immersiveGoogleApiKey || "").trim();
+  if (cloud && !apiKey) throw new Error("请填写 Google Cloud Translation API Key。");
+  const parts = googleTextParts(text);
+  const jobs = parts.filter((part) => part.translate);
+  for (let offset = 0; offset < jobs.length;) {
+    const batch = [];
+    let chars = 0;
+    while (offset < jobs.length && batch.length < (cloud ? 128 : 1) && chars + jobs[offset].text.length <= 4000) {
+      const part = jobs[offset++];
+      batch.push(part);
+      chars += part.text.length;
+    }
+    const translations = await withGoogleSlot(async () => {
+      if (!cloud && Date.now() < googleFreeCooldownUntil) throw new Error("免 Key 接口暂不可用，冷却 60 秒后可手动重试，或切换官方接口。");
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new Error("兜底处理时间已用完，请手动重试剩余段落。");
+      const source = request.sourceLanguage || "auto";
+      const target = request.targetLanguage || "zh-CN";
+      let url;
+      let options;
+      if (cloud) {
+        url = "https://translation.googleapis.com/language/translate/v2";
+        options = {
+          method: "POST", credentials: "omit", referrerPolicy: "no-referrer",
+          headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
+          body: JSON.stringify({ q: batch.map((part) => part.text), target, format: "text", model: "nmt",
+            ...(source === "auto" ? {} : { source }) })
+        };
+      } else {
+        url = `https://translate.googleapis.com/translate_a/single?client=gtx&dt=t&sl=${encodeURIComponent(source)}&tl=${encodeURIComponent(target)}&q=${encodeURIComponent(batch[0].text)}`;
+        options = { credentials: "omit", referrerPolicy: "no-referrer" };
+      }
+      try {
+        const { response, bodyText } = await fetchWithTimeout(url, options, Math.min(15000, remaining), cloud);
+        if (!response.ok) throw new Error(`Google ${cloud ? "Cloud" : "免 Key"} 请求失败 (${response.status})。${response.status === 429 ? "已被限流。" : "请检查网络、Key、API 权限和额度。"}`);
+        let body;
+        try { body = JSON.parse(bodyText); }
+        catch { throw new Error("Google 返回了无效 JSON。"); }
+        const values = cloud
+          ? body?.data?.translations?.map((entry) => entry?.translatedText)
+          : [Array.isArray(body?.[0]) ? body[0].map((entry) => typeof entry?.[0] === "string" ? entry[0] : "").join("") : ""];
+        if (!Array.isArray(values) || values.length !== batch.length || values.some((value) => typeof value !== "string" || !value.trim())) {
+          throw new Error("Google 返回了空译文或不完整结果。");
+        }
+        return values.map((value) => cloud ? decodeGoogleEntities(value) : value);
+      } catch (error) {
+        if (!cloud) googleFreeCooldownUntil = Date.now() + 60000;
+        throw error;
+      }
+    });
+    batch.forEach((part, index) => { part.text = translations[index]; });
+  }
+  return parts.map((part) => `${part.before || ""}${part.text}${part.after || ""}`).join("");
+}
+
+function decodeGoogleEntities(text) {
+  const named = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: "\u00a0" };
+  return text.replace(/&(#x[\da-f]+|#\d+|amp|lt|gt|quot|apos|nbsp);/gi, (match, entity) => {
+    if (entity[0] !== "#") return named[entity.toLowerCase()] || match;
+    const value = entity[1].toLowerCase() === "x" ? parseInt(entity.slice(2), 16) : Number(entity.slice(1));
+    return value >= 0 && value <= 0x10ffff ? String.fromCodePoint(value) : match;
+  });
+}
+
 function inFlightCueKey(cacheKey, cueId, sourceText) {
   return `${cacheKey}:${cueId}:${Core.fingerprintText(sourceText || "")}`;
 }
@@ -569,8 +728,15 @@ async function translateMissingCues(request) {
 
   if (ownedCues.length) {
     const batchPromise = (async () => {
+      const retain = async (items) => {
+        for (const item of items) {
+          const cue = pendingCues.find((entry) => String(entry.id) === String(item.id));
+          if (cue) completedCueTranslations.set(inFlightCueKey(request.cacheKey, cue.id, cue.sourceText), item);
+        }
+        await request.persistItems(items);
+      };
       const newItems = pendingCues.length
-        ? await translateWithRetry(Object.assign({}, request, { cues: pendingCues }))
+        ? await (request.translateCues || translateWithRetry)(Object.assign({}, request, { cues: pendingCues }), retain)
         : [];
       for (const item of newItems) {
         const cue = pendingCues.find((entry) => String(entry.id) === String(item.id));
@@ -921,9 +1087,9 @@ function extractGeminiCandidateText(candidate) {
     .trim();
 }
 
-async function fetchWithTimeout(url, options) {
+async function fetchWithTimeout(url, options, timeoutMs = REQUEST_TIMEOUT_MS, potentiallyBilled = true) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, Object.assign({}, options, { signal: controller.signal }));
     // fetch resolves at response headers; the body may still stall indefinitely.
@@ -931,8 +1097,10 @@ async function fetchWithTimeout(url, options) {
     return { response, bodyText };
   } catch (error) {
     if (controller.signal.aborted) {
-      const failure = new Error("翻译接口响应超时，请稍后查看缓存或手动重试；请求可能已经计费。");
-      failure.requestMayHaveReachedProvider = true;
+      const failure = new Error(potentiallyBilled
+        ? "翻译接口响应超时，请稍后查看缓存或手动重试；请求可能已经计费。"
+        : "Google 免 Key 接口响应超时，请稍后手动重试。");
+      failure.requestMayHaveReachedProvider = potentiallyBilled;
       throw failure;
     }
     throw error;

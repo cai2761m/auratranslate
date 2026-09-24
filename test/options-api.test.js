@@ -5,6 +5,27 @@ const path = require("node:path");
 const { JSDOM } = require("jsdom");
 const Core = require("../src/shared.js");
 
+test("Google fallback is opt-in and both modes preserve their independent Cloud key", async (t) => {
+  const storage = {};
+  const page = await openSettings(t, storage);
+  assert.equal(page.field("immersiveFallbackProvider").value, "off");
+  assert.equal(page.field("immersiveGoogleApiKey").closest("label").hidden, true);
+  page.field("immersiveFallbackProvider").value = "google-cloud";
+  const selector = page.field("immersiveFallbackProvider");
+  selector.dispatchEvent(new selector.ownerDocument.defaultView.Event("change"));
+  assert.equal(page.field("immersiveGoogleApiKey").closest("label").hidden, false);
+  page.field("immersiveGoogleApiKey").value = " cloud-test-key ";
+  await page.save();
+  assert.equal(storage.immersiveFallbackProvider, "google-cloud");
+  assert.equal(storage.immersiveGoogleApiKey, "cloud-test-key");
+  const reopened = await openSettings(t, storage);
+  assert.equal(reopened.field("immersiveFallbackProvider").value, "google-cloud");
+  reopened.field("immersiveFallbackProvider").value = "google-free";
+  await reopened.save();
+  assert.equal(storage.immersiveFallbackProvider, "google-free");
+  assert.equal(storage.immersiveGoogleApiKey, "cloud-test-key");
+});
+
 async function openSettings(t, storage) {
   const dom = new JSDOM(fs.readFileSync(path.join(__dirname, "../options/options.html"), "utf8"), {
     runScripts: "outside-only"

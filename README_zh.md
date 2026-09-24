@@ -54,6 +54,15 @@ git clone https://github.com/cai2761m/auratranslate.git
 
 在 **沉浸式翻译 API** 中，保留 **沿用实时字幕 API** 即可共用上述配置；如需独立调用，选择 **OpenAI-compatible API**，并填写另一组密钥、地址和模型。
 
+**Google 翻译兜底** 默认关闭，可选择两种网页翻译兜底：
+
+- **Google 翻译（免 Key，可能限流）**：使用非官方免 Key 接口，无 Cloud API 账单；可能限流、被网络阻断、变更或失效，不保证可用性。
+- **Google Cloud Translation（官方 API）**：使用官方 Basic v2 NMT 接口。需单独填写 Cloud Translation API Key、启用 API 并[开通结算](https://docs.cloud.google.com/translate/docs/setup)，不是 Gemini Key。每月前 50 万字符有免费额度，超额按 [Google 官方价格](https://cloud.google.com/products/translate/pricing)收费，扩展不会监控或限制该额度。
+
+启用后先读缓存，主 API 未配置、失败或漏译时，仅把缺失文本交给所选 Google 服务。主 API 每批尝试一次后切换兜底，不自动重发该请求；主接口超时也可能已计费，官方 Google 兜底可能额外收费。Google 请求不自动重试，后续段落失败也会保留前面已成功的缓存。切换或关闭兜底不会清除已有译文；需要替换已有译文时可清空翻译缓存，但可能产生新的费用。
+
+Google 兜底在本地保留代码、链接和强调格式，分段翻译格式之间的文字，因此格式边界附近的上下文可能减少。Google 请求最多并发 2 个，单次请求最多等待 15 秒，每批兜底处理预算为 45 秒；免 Key 接口失败后，在当前后台进程内冷却 60 秒。两个服务均失败时，已完成的段落保留，剩余翻译暂停。字幕翻译不受此设置影响。
+
 最后点击 **保存设置**。扩展不附带 API Key，接口调用费用由你使用的服务商按其规则收取。
 
 ### 3. 开始翻译
@@ -115,6 +124,8 @@ Android 上使用 Firefox 网页版视频和经过 Mozilla 签名的扩展包；
 | YouTube / Drive 页面访问 | 读取字幕元数据或转写文本，在播放器中显示字幕 |
 
 翻译时，待处理的字幕或网页文本会发送到你配置的 API 地址；LLM 智能断句也会向该接口发送字幕文本。API Key 保存在浏览器扩展的本地存储中，项目没有额外加密存储密钥；密码输入框只负责遮挡屏幕上的显示内容。
+
+启用 Google 兜底后，缺失的网页文本也可能发送到 `translate.googleapis.com`（免 Key）或 `translation.googleapis.com`（官方 Cloud）。兜底请求不携带浏览器 Cookie；Cloud Key 独立于 AI API Key，仅发送到官方接口。
 
 当前源码没有独立的 AuraTranslate 账号服务或统计上报接口。发送给 API 服务商的文本，由该服务商按其数据政策处理。
 

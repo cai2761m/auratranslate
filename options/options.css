@@ -141,6 +141,10 @@ p {
   font-weight: 700;
 }
 
+.field[hidden] {
+  display: none;
+}
+
 .field input,
 .field select {
   box-sizing: border-box;

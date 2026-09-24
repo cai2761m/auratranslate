@@ -54,6 +54,15 @@ For example, `https://api.example.com/v1` becomes `https://api.example.com/v1/ch
 
 Under **沉浸式翻译 API** (Immersive translation API), keep **沿用实时字幕 API** to share these settings, or select **OpenAI-compatible API** and fill in a separate key, base URL, and model.
 
+The **Google 翻译兜底** (Google fallback) selector is off by default. It provides two optional fallbacks for webpages:
+
+- **Google 翻译（免 Key，可能限流）** uses an unofficial, keyless endpoint without Cloud API billing. It may be rate limited, blocked by your network, changed, or withdrawn; availability is not guaranteed.
+- **Google Cloud Translation（官方 API）** uses the official Basic v2 NMT API. Enter a separate Cloud Translation API key, enable the API, and [enable billing](https://docs.cloud.google.com/translate/docs/setup). This is not a Gemini key. The first 500,000 characters per month have a free allowance; additional usage is charged under [Google's pricing](https://cloud.google.com/products/translate/pricing). The extension does not track or cap that allowance.
+
+With fallback enabled, cached translations load first. If the primary API is unconfigured, fails, or omits paragraphs, only missing text is sent to the selected Google service. The primary API gets one attempt per batch before fallback; a timed-out primary request may already have been billed, and official Google fallback may add a separate charge. Google requests are not automatically retried. Successful paragraphs are cached even if later paragraphs fail; changing or disabling fallback keeps existing cached translations. To replace cached output, clear the translation cache (this can cause new charges).
+
+Google fallback keeps code, links, and emphasis locally and translates text spans around them, which may reduce sentence context around formatting boundaries. It limits Google concurrency to two requests, bounds each request to 15 seconds, checks a 45-second fallback budget before sending each request, and cools down the keyless endpoint for 60 seconds after a failure while the background worker remains active. If both services fail, completed paragraphs stay visible and the remaining work pauses. Subtitle translation is unaffected.
+
 Click **保存设置** (Save settings). The extension does not include an API key; API usage is billed according to your provider's terms.
 
 ### 3. Start translating
@@ -115,6 +124,8 @@ An installed signed extension needs an updated signed package. Pulling GitHub ch
 | YouTube / Drive page access | Read caption metadata or transcript text and display the subtitle overlay |
 
 Translation sends selected caption or webpage text to the API endpoint you configure. LLM sentence segmentation also sends caption text to that endpoint. API keys are stored in browser extension local storage; the project does not add encryption for stored keys. The password input masks the key on screen only.
+
+Enabling Google fallback also allows missing webpage text to be sent to `translate.googleapis.com` (keyless) or `translation.googleapis.com` (official Cloud). Fallback requests omit browser cookies; the Cloud key is sent only to the official endpoint, independently of the AI API key.
 
 The current source does not include a separate AuraTranslate account service or analytics endpoint. Your API provider handles the text you send under its own data policies.
 

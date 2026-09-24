@@ -13,6 +13,8 @@
     immersiveTranslationBaseUrl: "",
     immersiveTranslationModel: "",
     immersiveTranslationJsonResponse: true,
+    immersiveFallbackProvider: "off",
+    immersiveGoogleApiKey: "",
     targetLanguage: "zh-CN",
     sourceLanguage: "en",
     fontScale: 1,

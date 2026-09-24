@@ -6,6 +6,8 @@
   const settingsToggle = document.querySelector("#settings-toggle");
   const realtimeApi = createApiFields("");
   const immersiveApi = createApiFields("immersive");
+  const immersiveFallbackProvider = document.querySelector("#immersiveFallbackProvider");
+  const immersiveGoogleApiKey = document.querySelector("#immersiveGoogleApiKey");
   const llmSentenceSegmentationEnabled = document.querySelector("#llmSentenceSegmentationEnabled");
   const asrCorrectionEnabled = document.querySelector("#asrCorrectionEnabled");
   const showOriginalTechnicalTerms = document.querySelector("#showOriginalTechnicalTerms");
@@ -29,6 +31,15 @@
     const settings = await storageGet(Core.DEFAULT_SETTINGS);
     hydrateApiFields(realtimeApi, settings, "realtime");
     hydrateApiFields(immersiveApi, settings, "immersive");
+    if (immersiveFallbackProvider && immersiveGoogleApiKey) {
+      immersiveFallbackProvider.value = settings.immersiveFallbackProvider || "off";
+      immersiveGoogleApiKey.value = settings.immersiveGoogleApiKey || "";
+      const updateFallbackFields = () => {
+        immersiveGoogleApiKey.closest("label").hidden = immersiveFallbackProvider.value !== "google-cloud";
+      };
+      updateFallbackFields();
+      immersiveFallbackProvider.addEventListener("change", updateFallbackFields);
+    }
 
     if (llmSentenceSegmentationEnabled) {
       llmSentenceSegmentationEnabled.checked = settings.llmSentenceSegmentationEnabled !== false;
@@ -153,6 +164,8 @@
       immersiveTranslationBaseUrl: useDedicatedImmersiveApi ? immersive.baseUrl : "",
       immersiveTranslationModel: useDedicatedImmersiveApi ? immersive.model : "",
       immersiveTranslationJsonResponse: useDedicatedImmersiveApi ? immersive.jsonResponse : true,
+      immersiveFallbackProvider: readValue(immersiveFallbackProvider, "off"),
+      immersiveGoogleApiKey: readValue(immersiveGoogleApiKey, "").trim(),
       llmSentenceSegmentationEnabled: readChecked(llmSentenceSegmentationEnabled, true),
       asrCorrectionEnabled: readChecked(asrCorrectionEnabled, true),
       showOriginalTechnicalTerms: readChecked(showOriginalTechnicalTerms, true),
