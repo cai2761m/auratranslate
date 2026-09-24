@@ -564,6 +564,27 @@ button.ghost.danger:hover {
   border-top: 1px solid #e5e7eb;
 }
 
+.cache-settings {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 24px;
+  padding: 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.cache-settings h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+.cache-settings p {
+  font-size: 12px;
+}
+
 button {
   border: 0;
   border-radius: 6px;
@@ -647,8 +668,13 @@ button.secondary:hover {
 }
 
   .model-row {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
-}
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  }
+
+  .cache-settings {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 
   .modal {
   padding: 12px 10px;

@@ -43,7 +43,7 @@
         </aside>
 
         <div class="settings-content">
-          <form id="settings-form" class="panel">
+          <div id="settings-form" class="panel">
             <section id="translation-services" class="settings-section" role="tabpanel" aria-labelledby="tab-translation-services" tabindex="0">
               <div class="section-heading">
                 <p class="section-kicker">Providers</p>
@@ -219,22 +219,22 @@
               <label class="field">
                 <span>字幕大小 <strong id="fontScaleValue">1.00x</strong></span>
                 <input id="fontScale" type="range" min="0.3" max="3" step="0.05" aria-describedby="fontScaleHint">
-                <small id="fontScaleHint">范围 0.30～3.00 倍，每次调整 0.05 倍。手机字幕偏大时可先试 0.50～0.65 倍，调整后点击“保存设置”。</small>
+                <small id="fontScaleHint">范围 0.30～3.00 倍，每次调整 0.05 倍。手机字幕偏大时可先试 0.50～0.65 倍，调整会自动保存。</small>
               </label>
 
               <label class="toggle">
                 <input id="subtitleEnabled" type="checkbox">
                 <span>启用插件字幕并隐藏 YouTube / Google Drive 原生字幕</span>
               </label>
+
+              <div class="cache-settings">
+                <div><h3>翻译缓存</h3><p>清除已保存的字幕和网页译文。之后再次查看时会重新翻译。</p></div>
+                <button id="clear-cache" type="button" class="secondary">清空翻译缓存</button>
+              </div>
             </section>
 
-            <div class="actions">
-              <button type="submit">保存设置</button>
-              <button id="clear-cache" type="button" class="secondary">清空翻译缓存</button>
-            </div>
-
             <p id="status" class="status" role="status"></p>
-          </form>
+          </div>
 
           <div class="modal" id="service-dialog" role="dialog" aria-modal="true" aria-labelledby="service-dialog-title" hidden>
             <div class="modal-backdrop" data-close="dialog"></div>
@@ -274,7 +274,7 @@
                 <button type="button" id="cancel-service" class="secondary">取消</button>
                 <button type="button" id="save-service">保存</button>
               </div>
-              <p class="dialog-save-hint">保存后，点击页面“保存设置”应用更改。</p>
+              <p class="dialog-save-hint">保存供应方后会立即应用更改。</p>
             </div>
           </div>
         </div>

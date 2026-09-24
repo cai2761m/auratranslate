@@ -72,6 +72,9 @@
     immersiveTranslationModelId: ""
   };
 
+  let saveTimer = null;
+  let saveQueue = Promise.resolve();
+
   let activateSubPage = () => {};
 
   init();
@@ -592,6 +595,7 @@
     renderServiceOptions();
     renderServiceList();
     closeServiceDialog();
+    saveSettings();
   }
 
   function deleteService(serviceId) {
@@ -612,6 +616,7 @@
     renderServiceOptions();
     renderServiceList();
     queryAll("[data-select-service]").find((button) => button.dataset.selectService === editor.selectedServiceId)?.focus();
+    saveSettings();
   }
 
   function nextServiceId() {
@@ -707,6 +712,7 @@
       renderServiceOptions();
       renderServiceList();
       message.textContent = ids.length ? `接口返回 ${ids.length} 个模型，新增 ${added.length} 个。` : "接口没有返回可用模型，请点击编辑手动添加。";
+      if (added.length) saveSettings();
     } catch (error) {
       if (isCurrent()) message.textContent = `获取失败（${error.name === "AbortError" ? "请求超时" : error.message}），已保留现有模型。`;
     } finally {
@@ -755,7 +761,8 @@
     if (fontScale) {
       fontScale.addEventListener("input", updateFontScaleLabel);
     }
-    form.addEventListener("submit", saveSettings);
+    form.addEventListener("input", scheduleAutoSave);
+    form.addEventListener("change", scheduleAutoSave);
     if (clearCache) {
       clearCache.addEventListener("click", clearTranslationCache);
     }
@@ -883,8 +890,21 @@
     return new Promise((resolve) => chrome.storage.local.remove(keys, resolve));
   }
 
-  async function saveSettings(event) {
-    event.preventDefault();
+  function scheduleAutoSave(event) {
+    if (dialog && dialog.contains(event.target)) return;
+    if (saveTimer !== null) clearTimeout(saveTimer);
+    if (event.type === "change") {
+      saveSettings();
+      return;
+    }
+    showStatus("正在保存修改…");
+    saveTimer = setTimeout(() => {
+      saveTimer = null;
+      saveSettings();
+    }, 250);
+  }
+
+  async function saveSettings() {
 
     const realtimeService = serviceById(editor.translationServiceId);
     const immersiveService = serviceById(editor.immersiveTranslationServiceId);
@@ -892,7 +912,7 @@
     const translationModelId = realtimeService ? Core.pickModelId(realtimeService, editor.translationModelId) : "";
     const immersiveModelId = dedicatedImmersive ? Core.pickModelId(immersiveService, editor.immersiveTranslationModelId) : "";
 
-    await storageSet({
+    const values = {
       translationServices: editor.services,
       translationServiceId: realtimeService ? realtimeService.id : "",
       translationModelId,
@@ -921,9 +941,13 @@
       subtitleEnabled: readChecked(subtitleEnabled, true),
       subtitleTranslationMode: readValue(subtitleTranslationMode, "economy") === "full" ? "full" : "economy",
       subtitleLookAheadMinutes: Number(readValue(subtitleLookAheadMinutes, "2"))
-    });
-    await storageRemove("deepseekApiKey");
-    showStatus("设置已保存。");
+    };
+    saveQueue = saveQueue.catch(() => {}).then(async () => {
+      await storageSet(values);
+      await storageRemove("deepseekApiKey");
+      showStatus("设置已自动保存。");
+    }).catch(() => showStatus("保存失败，请检查扩展存储空间后重试。"));
+    return saveQueue;
   }
 
   function readValue(element, fallback) {
