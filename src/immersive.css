@@ -106,6 +106,14 @@
   outline-offset: 2px;
 }
 
+html.ytbt-translation-only:not(.ytbt-immersive-hidden) [data-ytbt-original] {
+  display: none !important;
+}
+
+html.ytbt-translation-only:not(.ytbt-immersive-hidden) .ytbt-immersive-translation[data-ytbt-state="done"] {
+  margin-top: 0;
+}
+
 .ytbt-immersive-translation {
   box-sizing: border-box;
   display: block;

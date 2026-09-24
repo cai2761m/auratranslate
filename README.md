@@ -67,11 +67,15 @@ Click **保存设置** (Save settings). The extension does not include an API ke
 
 ### 3. Start translating
 
-**YouTube:** open a video with English captions and keep **启用视频实时翻译** enabled in the popup. The extension reads the caption track and displays bilingual subtitles as translations become available. Drag the subtitle text to move it.
+**YouTube:** open a video with English captions and keep **更多功能 → 视频实时字幕** enabled in the popup. The extension reads the caption track and displays bilingual subtitles as translations become available. Drag the subtitle text to move it.
 
 **Google Drive:** open a video that exposes a transcript. AuraTranslate briefly opens the transcript panel to read timestamped text, restores the panel, and displays bilingual subtitles inside the embedded player.
 
-**Webpages:** open a page with readable English text and click the floating translation button on the right. Translations appear below the original text, with content near the viewport prioritized. Progress never pops up on its own while translating — hover the floating button to see it. Once translation finishes, click the button to hide or show translations. Drag the button vertically to reposition it.
+**Webpages:** choose source language, target language and service in the extension popup, then click **翻译当前网页** (Translate current page), or use the floating button. Webpage translation defaults to automatic source detection and Simplified Chinese; popup language choices are independent of subtitle languages. The AI option displays the configured model. Selecting Google uses it directly; Cloud requires its separate API key in Settings. Visible paragraphs are prioritized and matching cached translations are reused.
+
+The icon beside Translate switches between bilingual and translation-only display without new translation requests. Pending or failed paragraphs retain their original text. **更多功能** (More) contains per-host rules: follow global, always auto-translate, or never auto-translate. Site rules override the global automatic translation switch, which is off by default. Popup preferences save immediately; the bottom gear opens full settings.
+
+Floating-button progress appears only on hover. After translation, click that button to hide or show output, or drag it vertically to reposition it. Refresh existing webpages after updating the extension so the new popup can connect to their content scripts.
 
 ## Subtitle settings
 

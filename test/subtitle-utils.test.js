@@ -719,7 +719,8 @@ test("sourceLanguageLabel and targetLanguageLabel resolve known and regional cod
   assert.equal(Core.targetLanguageLabel("zh-CN"), "Simplified Chinese");
   assert.equal(Core.targetLanguageLabel("zh-TW"), "Traditional Chinese");
   // Unknown codes fall back to Simplified Chinese (the default target).
-  assert.equal(Core.targetLanguageLabel("ja"), "Simplified Chinese");
+  assert.equal(Core.targetLanguageLabel("ja"), "Japanese");
+  assert.equal(Core.targetLanguageLabel("unknown"), "Simplified Chinese");
   assert.equal(Core.targetLanguageLabel(""), "Simplified Chinese");
 });
 

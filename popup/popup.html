@@ -1,33 +1,68 @@
 <!doctype html>
 <html lang="zh-CN">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>AuraTranslate</title>
-    <link rel="stylesheet" href="popup.css">
-  </head>
-  <body>
-    <main class="popup">
-      <header class="popup-header">
-        <div>
-          <h1>AuraTranslate</h1>
-          <p>配置实时字幕翻译和沉浸式网页翻译。</p>
-        </div>
-        <button id="open-settings" type="button" class="secondary compact">设置</button>
-      </header>
-
-      <section class="panel">
-        <label class="popup-toggle">
-          <span>
-            <strong>启用视频实时翻译</strong>
-            <small>开启后在 YouTube 和 Google Drive 视频中显示中英双语字幕，并隐藏原生字幕。</small>
-          </span>
-          <input id="subtitle-enabled-toggle" type="checkbox">
-        </label>
-      </section>
-
-    </main>
-
-    <script src="popup.js"></script>
-  </body>
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AuraTranslate</title><link rel="stylesheet" href="popup.css">
+</head>
+<body>
+<main class="popup">
+  <header class="popup-header">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">译</span><h1>AuraTranslate</h1></div>
+    <span id="version" class="version"></span>
+  </header>
+  <section class="translation-controls" aria-label="网页翻译">
+    <div class="language-pair">
+      <label class="select-field"><span>原文语言</span>
+        <select id="source-language" disabled aria-label="原文语言">
+          <option value="auto">自动检测</option><option value="en">英语</option>
+          <option value="zh-CN">简体中文</option><option value="zh-TW">繁体中文</option>
+          <option value="ja">日语</option><option value="ko">韩语</option>
+          <option value="fr">法语</option><option value="de">德语</option><option value="es">西班牙语</option>
+        </select>
+      </label>
+      <span class="direction" aria-hidden="true">→</span>
+      <label class="select-field"><span>译文语言</span>
+        <select id="target-language" disabled aria-label="译文语言">
+          <option value="zh-CN">简体中文</option><option value="zh-TW">繁体中文</option><option value="en">英语</option>
+          <option value="ja">日语</option><option value="ko">韩语</option><option value="fr">法语</option>
+          <option value="de">德语</option><option value="es">西班牙语</option>
+        </select>
+      </label>
+    </div>
+    <label class="select-field service-field"><span>翻译服务</span>
+      <select id="translation-service" disabled aria-label="翻译服务">
+        <option value="ai">AI 翻译</option><option value="google-free">Google 翻译 · 免 Key</option>
+        <option value="google-cloud">Google Cloud Translation</option>
+      </select>
+    </label>
+    <div class="translate-actions">
+      <button id="display-mode-toggle" class="mode-toggle" type="button" disabled aria-label="切换为仅译文" title="双语对照 · 点击切换为仅译文"><span id="mode-icon" aria-hidden="true">文/A</span></button>
+      <button id="translate-page" class="primary" type="button" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m13 2-9 12h7l-1 8 10-13h-7z"/></svg><span id="translate-label">翻译当前网页</span></button>
+    </div>
+    <p id="status" class="status" role="status" aria-live="polite">正在读取设置…</p>
+  </section>
+  <footer class="popup-footer">
+    <button id="open-settings" class="text-button" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 3-1 3-3 1-2 3 2 2-1 3 3 2 3-1 2 3 3-1 1-3 3-1 1-3-3-2V7l-3-1-2-3z"/><circle cx="11" cy="11" r="3"/></svg>设置</button>
+    <button id="more-toggle" class="text-button" type="button" aria-expanded="false" aria-controls="more-panel">更多功能<svg class="chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></button>
+  </footer>
+  <section id="more-panel" class="more-panel" hidden aria-label="更多功能">
+    <fieldset id="site-controls" disabled><legend>当前网站翻译设置</legend><p id="site-name" class="site-name"></p>
+      <div class="segmented" role="group" aria-label="当前网站翻译设置">
+        <button type="button" data-site-rule="inherit" aria-pressed="true">跟随全局</button>
+        <button type="button" data-site-rule="always" aria-pressed="false">自动翻译</button>
+        <button type="button" data-site-rule="never" aria-pressed="false">不自动翻译</button>
+      </div>
+    </fieldset>
+    <fieldset id="display-controls" disabled><legend>译文偏好</legend>
+      <div class="segmented" role="group" aria-label="译文偏好">
+        <button type="button" data-display-mode="bilingual" aria-pressed="true">文/A<span>双语对照</span></button>
+        <button type="button" data-display-mode="translation" aria-pressed="false">A<span>仅译文</span></button>
+      </div>
+    </fieldset>
+    <label class="popup-toggle"><span>全局自动翻译</span><input id="auto-translate-toggle" type="checkbox" disabled></label>
+    <label class="popup-toggle"><span>视频实时字幕<small>YouTube / Google Drive</small></span><input id="subtitle-enabled-toggle" type="checkbox" disabled></label>
+  </section>
+</main>
+<script src="../src/shared.js"></script><script src="popup.js"></script>
+</body>
 </html>

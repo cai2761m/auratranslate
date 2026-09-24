@@ -176,7 +176,7 @@ test("free Google covers missing config, caches across worker restarts and survi
   fixture.hooks.fetch = (url, options) => {
     assert.match(url, /^https:\/\/translate.googleapis.com\/translate_a\/single\?/);
     assert.equal(new URL(url).searchParams.get("q"), "Paragraph");
-    assert.equal(new URL(url).searchParams.get("sl"), "en");
+    assert.equal(new URL(url).searchParams.get("sl"), "auto");
     assert.equal(new URL(url).searchParams.get("tl"), "zh-CN");
     assert.equal(options.credentials, "omit");
     assert.equal(options.headers, undefined, "never forward AI or Cloud keys to the free endpoint");
@@ -420,7 +420,7 @@ test("immersive refresh shares in-flight paid work through persistence with diff
 test("immersive cache isolates changed text, page, model, languages, endpoint and cache version", async (t) => {
   for (const change of [
     { text: "Changed paragraph" }, { pageUrl: "https://docs.example.com/other" },
-    { translationModel: "new-model" }, { targetLanguage: "ja" }, { sourceLanguage: "fr" },
+    { translationModel: "new-model" }, { targetLanguage: "ja" }, { immersiveSourceLanguage: "fr" },
     { translationBaseUrl: "https://different.example.com/v1" }, { cacheVersion: "2" },
     { immersiveTranslationProvider: "custom", immersiveTranslationBaseUrl: "https://dedicated.example.com/v1", immersiveTranslationModel: "dedicated-model" }
   ]) {
@@ -629,4 +629,35 @@ test("storage read and eviction failures are surfaced and do not poison later wr
   assert.equal((await worker.request(translationMessage(["0"], { videoId: "video-2" }))).ok, true);
   assert.equal(fixture.fetchCount, 2);
   assert.equal(translationCaches(fixture).length, 1);
+});
+
+test('explicit Google service skips configured AI and isolates its cache from AI', async () => {
+  const fixture = createFixture({immersiveTranslationService:'google-free'});
+  fixture.hooks.fetch = (url) => {
+    assert.ok(url.startsWith('https://translate.googleapis.com/'));
+    assert.equal(new URL(url).searchParams.get('sl'),'auto');
+    return freeGoogleResponse();
+  };
+  const message = immersiveMessage(['Choose Google directly.']);
+  const result = await fixture.startWorker().request(message);
+  assert.equal(result.ok,true);
+  assert.equal(result.items[0].translatedText,'谷歌译文');
+  assert.equal(fixture.fetchCount,1);
+  assert.equal((await fixture.startWorker().request({...message,cacheOnly:true})).items.length,1);
+  assert.equal(fixture.fetchCount,1);
+  fixture.storage.immersiveTranslationService='ai';
+  assert.equal((await fixture.startWorker().request({...message,cacheOnly:true})).items.length,0);
+});
+
+test('a page language snapshot wins over later popup changes throughout a run', async () => {
+  const fixture = createFixture({immersiveTranslationService:'google-free',immersiveTargetLanguage:'ja'});
+  fixture.hooks.fetch = (url) => {
+    const query = new URL(url).searchParams;
+    assert.equal(query.get('sl'),'fr');
+    assert.equal(query.get('tl'),'en');
+    return freeGoogleResponse();
+  };
+  const result = await fixture.startWorker().request(immersiveMessage(['Le texte de cette page.'], {preferences:{immersiveSourceLanguage:'fr',immersiveTargetLanguage:'en',immersiveTranslationService:'google-free'}}));
+  assert.equal(result.ok,true);
+  assert.equal(result.items.length,1);
 });

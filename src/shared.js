@@ -14,6 +14,12 @@
     immersiveTranslationJsonResponse: true,
     immersiveFallbackProvider: "off",
     immersiveGoogleApiKey: "",
+    immersiveSourceLanguage: "auto",
+    immersiveTargetLanguage: "",
+    immersiveTranslationService: "ai",
+    immersiveDisplayMode: "bilingual",
+    immersiveAutoTranslate: false,
+    immersiveSiteRules: {},
     targetLanguage: "zh-CN",
     sourceLanguage: "en",
     fontScale: 1,
@@ -57,6 +63,12 @@
   // Human-readable labels for the languages the prompt references. Unknown
   // codes fall back to a safe default so the prompt always reads sensibly.
   const LANGUAGE_LABELS = {
+    "auto": "automatically detected source-language",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "fr": "French",
+    "de": "German",
+    "es": "Spanish",
     "en": "English",
     "zh-CN": "Simplified Chinese",
     "zh-TW": "Traditional Chinese"

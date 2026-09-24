@@ -440,9 +440,16 @@ async function handleTranslateBatch(message) {
 
 async function handleImmersiveTranslate(message) {
   const settings = await storageGet(Core.DEFAULT_SETTINGS);
-  const targetLanguage = settings.targetLanguage || Core.DEFAULT_SETTINGS.targetLanguage;
-  const sourceLanguage = settings.sourceLanguage || Core.DEFAULT_SETTINGS.sourceLanguage;
+  const preferences = message.preferences || settings;
+  const targetLanguage = preferences.immersiveTargetLanguage || settings.targetLanguage || Core.DEFAULT_SETTINGS.targetLanguage;
+  const sourceLanguage = preferences.immersiveSourceLanguage || "auto";
+  const service = preferences.immersiveTranslationService || "ai";
   const translationConfig = Core.resolveTranslationConfig(settings, "immersive");
+  if (["google-free", "google-cloud"].includes(service)) {
+    // A selected Google service is the primary provider, even with AI configured.
+    settings.immersiveFallbackProvider = service;
+    Object.assign(translationConfig, { provider: service, apiKey: "", model: "", chatCompletionsUrl: "", generateContentUrl: "" });
+  }
 
   const endpointUrl =
     translationConfig.apiStyle === "gemini"

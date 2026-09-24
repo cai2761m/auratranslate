@@ -264,6 +264,9 @@
     recovery: null,
     recoveryTimer: null,
     recovering: false,
+    preferences: { ...Core.DEFAULT_SETTINGS },
+    runPreferences: null,
+    preferencesReady: null,
     ballTopPct: DEFAULT_BALL_TOP_PCT,
     ballDrag: {
       pointerId: null,
@@ -283,6 +286,21 @@
       return;
     }
     root.dataset.ytbtImmersiveReady = "true";
+    state.preferencesReady = loadPreferences();
+    chrome.runtime.onMessage?.addListener((message, _sender, sendResponse) => {
+      if (message.type === "IMMERSIVE_POPUP_TRANSLATE") {
+        if (state.mode !== "translating") translateCurrentPage();
+      } else if (message.type !== "IMMERSIVE_POPUP_STATUS") return;
+      sendResponse({ ok: true, mode: state.mode, translated: state.translated, status: state.panelStatusText });
+    });
+    chrome.storage.onChanged?.addListener((changes, area) => {
+      if (area !== "local") return;
+      for (const key of Object.keys(Core.DEFAULT_SETTINGS)) {
+        if (changes[key]) state.preferences[key] = changes[key].newValue ?? Core.DEFAULT_SETTINGS[key];
+      }
+      if (changes.immersiveDisplayMode) applyDisplayMode();
+      if (changes.immersiveAutoTranslate || changes.immersiveSiteRules) maybeAutoTranslate();
+    });
     document.addEventListener("visibilitychange", () => {
       syncPageIdentity();
       if (!document.hidden) recoverCachedTranslations();
@@ -344,6 +362,38 @@
     state.panel = panel;
     loadBallPosition();
     updateBallMode("idle");
+    state.preferencesReady.then(maybeAutoTranslate);
+  }
+
+  async function loadPreferences() {
+    try { state.preferences = { ...await storageGet(Core.DEFAULT_SETTINGS) }; }
+    catch (_) { /* Manual translation can still report a storage error. */ }
+    applyDisplayMode();
+  }
+
+  function maybeAutoTranslate() {
+    const rule = state.preferences.immersiveSiteRules?.[location.hostname];
+    const enabled = rule === "always" || (rule !== "never" && state.preferences.immersiveAutoTranslate === true);
+    if (enabled && state.ball && !state.translated && state.mode === "idle") translateCurrentPage();
+  }
+
+  function applyDisplayMode() {
+    const translationOnly = state.preferences.immersiveDisplayMode === "translation";
+    document.documentElement.classList.toggle("ytbt-translation-only", translationOnly);
+    for (const container of document.querySelectorAll("[data-ytbt-immersive-translation][data-ytbt-state='done']")) {
+      const source = container.parentElement;
+      if (translationOnly && !source.querySelector(":scope > [data-ytbt-original]")) {
+        const original = document.createElement("span");
+        original.dataset.ytbtOriginal = "true";
+        for (const child of Array.from(source.childNodes)) if (child !== container) original.appendChild(child);
+        source.insertBefore(original, container);
+      }
+    }
+    if (!translationOnly) restoreOriginalNodes();
+  }
+
+  function restoreOriginalNodes() {
+    for (const original of document.querySelectorAll("[data-ytbt-original]")) original.replaceWith(...original.childNodes);
   }
 
   function handleControlPointerEnter() {
@@ -546,6 +596,7 @@
     updateBallMode("idle");
     showStatus(null);
     window.dispatchEvent(new Event("ytbt-page-changed"));
+    setTimeout(maybeAutoTranslate, 0);
   }
 
   function isCurrentRun(token, pageUrl) {
@@ -626,14 +677,19 @@
   }
 
   async function translateCurrentPage() {
+    if (state.mode === "translating") return;
+    updateBallMode("translating");
+    await state.preferencesReady;
     syncPageIdentity();
+    state.runPreferences = { ...state.preferences };
     const pageUrl = state.pageUrl;
     clearRecovery();
     clearExistingTranslations();
+    state.translated = false;
     const blocks = collectBlocks();
     if (!blocks.length) {
       updateBallMode("idle");
-      showStatus("No readable English text found on this page.");
+      showStatus("当前页面没有找到可翻译的正文。");
       return;
     }
 
@@ -1062,14 +1118,23 @@
     if (!text) {
       return false;
     }
-    if (!/[A-Za-z]/.test(text)) {
+    if (!/\p{L}/u.test(text)) {
       return false;
     }
     if (/^https?:\/\//i.test(text) || /^[\d\s.,:;!?()[\]{}'"`~@#$%^&*_+=|\\/-]+$/.test(text)) {
       return false;
     }
 
-    const words = text.match(/[A-Za-z][A-Za-z'-]*/g) || [];
+    const preferences = state.runPreferences || state.preferences;
+    const source = preferences.immersiveSourceLanguage;
+    const target = preferences.immersiveTargetLanguage || preferences.targetLanguage;
+    const cjk = text.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu) || [];
+    if (cjk.length >= 2) {
+      // Auto detection should not retranslate paragraphs already in the target script.
+      if (source === "auto" && target?.startsWith("zh") && !/[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(text) && cjk.length > text.length / 2) return false;
+      return isShortTextBlock(element) || cjk.length >= 4;
+    }
+    const words = text.match(/\p{L}[\p{L}'-]*/gu) || [];
     if (isShortTextBlock(element)) {
       return words.length >= 1 && text.length >= 2;
     }
@@ -1088,6 +1153,7 @@
   }
 
   function clearExistingTranslations() {
+    restoreOriginalNodes();
     for (const node of document.querySelectorAll("[data-ytbt-immersive-translation]")) {
       node.remove();
     }
@@ -1140,6 +1206,7 @@
     }
     container.dataset.ytbtState = "done";
     container.removeAttribute("aria-busy");
+    applyDisplayMode();
   }
 
   function renderTranslationError(block, message) {
@@ -1182,6 +1249,11 @@
       type: "IMMERSIVE_TRANSLATE",
       pageUrl,
       cacheOnly,
+      preferences: {
+        immersiveSourceLanguage: state.runPreferences?.immersiveSourceLanguage || "auto",
+        immersiveTargetLanguage: state.runPreferences?.immersiveTargetLanguage || state.runPreferences?.targetLanguage || "zh-CN",
+        immersiveTranslationService: state.runPreferences?.immersiveTranslationService || "ai"
+      },
       items: batch.map((block) => ({
         id: block.id,
         sourceText: block.sourceText,

@@ -39,7 +39,7 @@ async function translatePage(t, html, options = {}) {
     }
   };
   window.eval(immersiveScript);
-  window.document.querySelector(".ytbt-immersive-tab").click();
+  if (options.start !== false) window.document.querySelector(".ytbt-immersive-tab").click();
   await options.afterStart?.({ window, requests });
   for (let turn = 0; turn < 50; turn += 1) {
     await new Promise((resolve) => setImmediate(resolve));
@@ -774,4 +774,71 @@ test("legacy code matching handles overlapping identifiers without styling subst
     sendMessage: (message) => ({ ok: true, items: [{ id: message.items[0].id, translatedText: "bread 和 readAsString()、read、readAsString()。" }] })
   });
   assert.deepEqual(Array.from(document.querySelectorAll(".ytbt-immersive-text code"), (node) => node.textContent), ["readAsString()", "read", "readAsString()"]);
+});
+
+test("popup mode changes reuse translations and preserve original DOM nodes and listeners", async (t) => {
+  let changed;
+  let clicks = 0;
+  let originalLink;
+  const {document,requests} = await translatePage(t, '<main><p>Read this <a href="#guide">detailed guide</a> before proceeding.</p></main>', {
+    setup(window) {
+      window.chrome.storage.onChanged = {addListener(fn) { changed = fn; }};
+      originalLink = window.document.querySelector('a');
+      originalLink.addEventListener('click', (event) => { event.preventDefault(); clicks++; });
+    }
+  });
+  const count = requests.length;
+  changed({immersiveDisplayMode:{newValue:'translation'}}, 'local');
+  assert.ok(document.documentElement.classList.contains('ytbt-translation-only'));
+  assert.equal(document.querySelector('[data-ytbt-original] a'),originalLink);
+  assert.equal(document.querySelectorAll('[data-ytbt-original]').length,1);
+  document.querySelector('.ytbt-immersive-tab').click();
+  assert.ok(document.documentElement.classList.contains('ytbt-immersive-hidden'));
+  changed({immersiveDisplayMode:{newValue:'bilingual'}}, 'local');
+  assert.equal(document.querySelector('[data-ytbt-original]'),null);
+  assert.equal(document.querySelector('p > a'),originalLink);
+  originalLink.click();
+  assert.equal(clicks,1);
+  assert.equal(requests.length,count);
+});
+
+test("popup messages start translation without toggling results and pass a stable language profile", async (t) => {
+  let listener;
+  const {requests} = await translatePage(t, paragraphs(1), {
+    start:false,
+    setup(window) {
+      window.chrome.runtime.onMessage = {addListener(fn) { listener = fn; }};
+      window.chrome.storage.local.get = (defaults, callback) => callback({...defaults, immersiveSourceLanguage:'en',immersiveTargetLanguage:'ja',immersiveTranslationService:'google-free'});
+    },
+    afterStart() {
+      let reply;
+      listener({type:'IMMERSIVE_POPUP_TRANSLATE'}, {}, (value) => {reply = value;});
+      assert.equal(reply.ok,true);
+      assert.equal(reply.mode,'translating');
+      listener({type:'IMMERSIVE_POPUP_TRANSLATE'}, {}, () => {});
+    }
+  });
+  assert.equal(requests.filter((request) => !request.cacheOnly).length,1);
+  assert.equal(requests[0].preferences.immersiveSourceLanguage,'en');
+  assert.equal(requests[0].preferences.immersiveTargetLanguage,'ja');
+  assert.equal(requests[0].preferences.immersiveTranslationService,'google-free');
+  assert.equal(requests[0].preferences.translationApiKey,undefined);
+});
+
+test("website rules override global automatic translation and default stays manual", async (t) => {
+  for (const [global,rule,expected] of [[false,'always','done'],[true,'never','idle'],[true,undefined,'done'],[false,undefined,'idle']]) {
+    const {requests} = await translatePage(t, paragraphs(1), {
+      start:false,expectedState:expected,
+      setup(window) {
+        window.chrome.storage.local.get = (defaults, callback) => callback({...defaults,
+          immersiveAutoTranslate:global,immersiveSiteRules:{'docs.flutter.dev':rule}});
+      }
+    });
+    assert.equal(requests.some((request) => !request.cacheOnly), expected === 'done');
+  }
+});
+
+test("Japanese paragraphs can translate when auto detection targets Chinese", async (t) => {
+  const {texts} = await translatePage(t, '<main><p>このページの設定方法を確認してください。</p></main>');
+  assert.equal(texts.length,1);
 });
