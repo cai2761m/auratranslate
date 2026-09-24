@@ -7,8 +7,8 @@
   align-items: center;
   justify-content: center;
   box-sizing: border-box;
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
   padding: 0;
   margin: 0;
   background: #ffffff;
@@ -49,8 +49,8 @@
   box-sizing: border-box;
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   padding: 0;
   margin: 0;
   border: none;
@@ -60,6 +60,11 @@
   box-shadow: 0 4px 10px rgba(190, 24, 93, 0.22);
   pointer-events: none;
   transition: transform 160ms ease;
+}
+
+.ytbt-immersive-ball svg {
+  width: 16px;
+  height: 16px;
 }
 
 .ytbt-immersive-tab[data-ytbt-state="translating"] .ytbt-immersive-ball {
