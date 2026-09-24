@@ -2,6 +2,3 @@ node_modules/
 .DS_Store
 *.log
 AGENTS.md
-
-# 第三方插件源码（本地克隆，不随本仓库提交）
-agent-vision-toolkit/
