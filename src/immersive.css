@@ -46,6 +46,8 @@
 }
 
 .ytbt-immersive-ball {
+  position: relative;
+  overflow: visible;
   box-sizing: border-box;
   display: grid;
   place-items: center;
@@ -71,8 +73,21 @@
   animation: ytbt-immersive-pulse 1.2s ease-in-out infinite;
 }
 
-.ytbt-immersive-tab[data-ytbt-state="done"] .ytbt-immersive-ball {
-  background: linear-gradient(145deg, #047857, #16a34a);
+.ytbt-immersive-tab[data-ytbt-state="done"] .ytbt-immersive-ball::after {
+  content: "\2713";
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  box-sizing: border-box;
+  width: 12px;
+  height: 12px;
+  border: 1px solid #fbcfe8;
+  border-radius: 50%;
+  background: #fff;
+  color: #db2777;
+  font: 700 10px/10px Arial, sans-serif;
+  text-align: center;
+  box-shadow: 0 1px 3px rgba(190, 24, 93, 0.16);
 }
 
 .ytbt-immersive-tab[data-ytbt-state="error"] .ytbt-immersive-ball {
