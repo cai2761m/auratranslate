@@ -12,22 +12,27 @@
         <div>
           <p class="eyebrow">AuraTranslate</p>
           <h1>设置</h1>
-          <p>分别配置 YouTube / Google Drive 实时字幕翻译和普通网页沉浸式翻译使用的 LLM API。</p>
+          <p>在“翻译服务”页维护供应方和模型目录，其余页面只选择要使用的服务与模型。</p>
         </div>
       </header>
 
       <div class="settings-layout">
         <aside class="settings-sidebar">
           <nav class="sidebar-nav" role="tablist" aria-orientation="vertical" aria-label="设置导航">
+            <button type="button" id="tab-translation-services" class="sidebar-link" role="tab"
+              aria-controls="translation-services" aria-selected="true" tabindex="0">
+              <span class="sidebar-title">翻译服务</span>
+              <span class="sidebar-desc">供应方与模型目录</span>
+            </button>
             <button type="button" id="tab-realtime-api" class="sidebar-link" role="tab"
-              aria-controls="realtime-api" aria-selected="true" tabindex="0">
+              aria-controls="realtime-api" aria-selected="false" tabindex="-1">
               <span class="sidebar-title">实时字幕</span>
-              <span class="sidebar-desc">视频双语字幕 API</span>
+              <span class="sidebar-desc">视频双语字幕</span>
             </button>
             <button type="button" id="tab-immersive-api" class="sidebar-link" role="tab"
               aria-controls="immersive-api" aria-selected="false" tabindex="-1">
               <span class="sidebar-title">沉浸式翻译</span>
-              <span class="sidebar-desc">网页翻译 API</span>
+              <span class="sidebar-desc">网页翻译</span>
             </button>
             <button type="button" id="tab-general-settings" class="sidebar-link" role="tab"
               aria-controls="general-settings" aria-selected="false" tabindex="-1">
@@ -39,36 +44,52 @@
 
         <div class="settings-content">
           <form id="settings-form" class="panel">
-            <section id="realtime-api" class="settings-section" role="tabpanel" aria-labelledby="tab-realtime-api" tabindex="0">
+            <section id="translation-services" class="settings-section" role="tabpanel" aria-labelledby="tab-translation-services" tabindex="0">
+              <div class="section-heading">
+                <p class="section-kicker">Providers</p>
+                <h2>翻译服务</h2>
+                <p>添加自定义供应方并维护它的模型目录；“实时字幕”和“沉浸式翻译”页只从这里挑选服务与模型。</p>
+              </div>
+
+              <div class="service-list" id="custom-service-list"></div>
+              <p class="service-empty" id="custom-service-empty">还没有自定义供应方，点击下面的按钮添加第一个。</p>
+              <div class="inline-actions">
+                <button type="button" id="add-service">添加自定义供应方</button>
+              </div>
+
+              <div class="subsection">
+                <h3>其他翻译服务</h3>
+                <article class="service-card is-builtin">
+                  <div class="service-card-head">
+                    <h4 class="service-name">谷歌翻译</h4>
+                    <span class="service-tag">免 Key</span>
+                  </div>
+                  <p class="service-desc"><span class="service-desc-label">描述</span><span>免 Key 接口，可能限流、不可访问或失效。作为网页翻译兜底使用，请在“沉浸式翻译”页开启。</span></p>
+                </article>
+              </div>
+            </section>
+
+            <section id="realtime-api" class="settings-section" role="tabpanel" aria-labelledby="tab-realtime-api" tabindex="0" hidden>
               <div class="section-heading">
                 <p class="section-kicker">YouTube / Google Drive</p>
                 <h2>实时字幕翻译 API</h2>
                 <p>用于 YouTube 和 Google Drive 字幕抓取、预翻译及视频上的双语字幕叠加层。</p>
               </div>
 
+              <p class="section-note" id="realtime-service-hint" hidden>还没有可用的翻译服务，请先到
+                <button type="button" class="link-button" data-goto="translation-services">翻译服务</button> 页添加供应方和模型。
+              </p>
+
               <label class="field">
                 <span>翻译服务</span>
-                <select id="translationProvider">
-                  <option value="custom">OpenAI-compatible API</option>
-                </select>
+                <select id="translationServiceId"></select>
               </label>
 
               <label class="field">
-                <span>API Key</span>
-                <input id="translationApiKey" type="password" autocomplete="off" placeholder="sk-...">
+                <span>模型</span>
+                <select id="translationModelId"></select>
+                <small id="translationModelHint"></small>
               </label>
-
-              <div class="grid">
-                <label class="field">
-                  <span>Base URL</span>
-                  <input id="translationBaseUrl" type="url" autocomplete="off" placeholder="https://api.example.com/v1">
-                </label>
-
-                <label class="field">
-                  <span>模型</span>
-                  <input id="translationModel" type="text" autocomplete="off" placeholder="model-name">
-                </label>
-              </div>
 
               <label class="toggle">
                 <input id="translationJsonResponse" type="checkbox">
@@ -83,37 +104,26 @@
                 <p>用于普通网页右侧小圆球触发的中英对照翻译。</p>
               </div>
 
-              <p class="section-note">默认沿用实时字幕 API；选择 OpenAI-compatible API 后可单独配置沉浸式翻译调用的 API。</p>
+              <p class="section-note">默认沿用实时字幕选中的服务和模型；也可以单独选择另一个翻译服务。</p>
 
               <label class="field">
                 <span>翻译服务</span>
-                <select id="immersiveTranslationProvider">
-                  <option value="">沿用实时字幕 API</option>
-                  <option value="custom">OpenAI-compatible API</option>
+                <select id="immersiveTranslationServiceId">
+                  <option value="">沿用实时字幕服务</option>
                 </select>
               </label>
 
               <label class="field">
-                <span>API Key</span>
-                <input id="immersiveTranslationApiKey" type="password" autocomplete="off" placeholder="沿用实时字幕 API Key">
+                <span>模型</span>
+                <select id="immersiveTranslationModelId"></select>
+                <small id="immersiveTranslationModelHint"></small>
               </label>
-
-              <div class="grid">
-                <label class="field">
-                  <span>Base URL</span>
-                  <input id="immersiveTranslationBaseUrl" type="url" autocomplete="off" placeholder="沿用实时字幕 Base URL">
-                </label>
-
-                <label class="field">
-                  <span>模型</span>
-                  <input id="immersiveTranslationModel" type="text" autocomplete="off" placeholder="沿用实时字幕模型">
-                </label>
-              </div>
 
               <label class="toggle">
                 <input id="immersiveTranslationJsonResponse" type="checkbox">
                 <span>请求 JSON 输出模式，不兼容时可关闭</span>
               </label>
+
               <label class="field">
                 <span>Google 翻译兜底</span>
                 <select id="immersiveFallbackProvider">
@@ -210,6 +220,47 @@
             <p id="status" class="status" role="status"></p>
           </form>
 
+          <div class="modal" id="service-dialog" role="dialog" aria-modal="true" aria-labelledby="service-dialog-title" hidden>
+            <div class="modal-backdrop" data-close="dialog"></div>
+            <div class="modal-panel">
+              <h2 id="service-dialog-title">添加自定义供应方</h2>
+
+              <label class="field">
+                <span>供应方名称</span>
+                <input id="service-name" type="text" autocomplete="off" placeholder="例如：我的中转服务">
+              </label>
+
+              <label class="field">
+                <span>API 地址</span>
+                <input id="service-base-url" type="url" autocomplete="off" placeholder="https://api.example.com/v1">
+              </label>
+
+              <label class="field">
+                <span>API 协议</span>
+                <select id="service-protocol"></select>
+              </label>
+
+              <label class="field">
+                <span>密钥</span>
+                <input id="service-api-key" type="password" autocomplete="off" placeholder="sk-...">
+              </label>
+
+              <div class="field">
+                <span>模型目录</span>
+                <div class="model-rows" id="service-models"></div>
+                <div class="inline-actions">
+                  <button type="button" id="add-model-row" class="secondary">添加</button>
+                  <button type="button" id="fetch-models" class="secondary">获取可用模型</button>
+                </div>
+                <small id="service-models-status" role="status"></small>
+              </div>
+
+              <div class="modal-actions">
+                <button type="button" id="cancel-service" class="secondary">取消</button>
+                <button type="button" id="save-service">保存</button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </main>

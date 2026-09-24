@@ -7,6 +7,16 @@
   "use strict";
 
   const DEFAULT_SETTINGS = Object.freeze({
+    // User-managed provider list. Each entry owns its own credential, endpoint,
+    // protocol and model catalog; the subtitle and immersive pages only pick
+    // one entry plus one model from it.
+    translationServices: [],
+    translationServiceId: "",
+    translationModelId: "",
+    immersiveTranslationServiceId: "",
+    immersiveTranslationModelId: "",
+    // Legacy single-provider keys. They stay readable (and are mirrored on save)
+    // so settings written by older versions keep working untouched.
     translationProvider: "deepseek",
     translationApiKey: "",
     translationBaseUrl: "",
@@ -59,6 +69,14 @@
   const SENTENCE_SEGMENTATION_VERSION = "1";
   const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
   const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
+
+  // Every service entry speaks the OpenAI-compatible protocol today; the map
+  // exists so the settings UI can label the value and new protocols can be
+  // added without touching the option pages.
+  const TRANSLATION_SERVICE_PROTOCOLS = Object.freeze({
+    "openai-compatible": "OpenAI-compatible API"
+  });
+  const DEFAULT_SERVICE_PROTOCOL = "openai-compatible";
 
   // Upper bound on the number of cached cue translations. Each `ytbt:` storage
   // key holds an entire video; once this many cached cues accumulate, the
@@ -145,10 +163,258 @@
     return `${trimmedBaseUrl}/${encodedModelPath}:generateContent`;
   }
 
+  // Rewrites a legacy Gemini endpoint to its OpenAI-compatible sibling. The
+  // settings form has been compatible-only since the provider list existed.
+  function openAiCompatibleBaseUrl(baseUrl, provider) {
+    const raw = String(baseUrl || "").trim();
+    if (provider !== "gemini") return raw;
+    const withoutEndpoint = raw.replace(/\/+$/, "").replace(/\/(?:models|tunedModels)\/[^/]+:generateContent$/i, "");
+    const base = withoutEndpoint || GEMINI_BASE_URL;
+    return /\/openai$/i.test(base) ? base : `${base}/openai`;
+  }
+
+  function hostLabel(baseUrl) {
+    const raw = String(baseUrl || "").trim();
+    if (!raw) return "";
+    try {
+      return new URL(raw).host || raw;
+    } catch (error) {
+      return raw.replace(/^[a-z]+:\/\//i, "").replace(/\/.*$/, "");
+    }
+  }
+
+  function normalizeServiceModels(models) {
+    const normalized = [];
+    const seen = new Set();
+    for (const entry of Array.isArray(models) ? models : []) {
+      const id = String((entry && entry.id) || "").trim();
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      normalized.push({ id, displayName: String((entry && entry.displayName) || "").trim() });
+    }
+    return normalized;
+  }
+
+  function normalizeTranslationService(service, index) {
+    const source = service && typeof service === "object" ? service : {};
+    return {
+      id: String(source.id || "").trim() || `service-${index + 1}`,
+      name: String(source.name || "").trim(),
+      apiProtocol: TRANSLATION_SERVICE_PROTOCOLS[source.apiProtocol]
+        ? source.apiProtocol
+        : DEFAULT_SERVICE_PROTOCOL,
+      baseUrl: String(source.baseUrl || "").trim(),
+      apiKey: String(source.apiKey || "").trim(),
+      models: normalizeServiceModels(source.models)
+    };
+  }
+
+  function normalizeTranslationServices(services) {
+    const list = Array.isArray(services) ? services : [];
+    const normalized = [];
+    const seen = new Set();
+    for (let index = 0; index < list.length; index += 1) {
+      const service = normalizeTranslationService(list[index], index);
+      if (seen.has(service.id)) {
+        service.id = `${service.id}-${index + 1}`;
+      }
+      seen.add(service.id);
+      normalized.push(service);
+    }
+    return normalized;
+  }
+
+  // The row description shown on the 翻译服务 page. Incomplete entries read as
+  // "待完善" so it is obvious which service still needs an endpoint or a model.
+  function describeTranslationService(service) {
+    const normalized = normalizeTranslationService(service, 0);
+    const host = hostLabel(normalized.baseUrl);
+    if (!host) return "待完善";
+    const protocol = TRANSLATION_SERVICE_PROTOCOLS[normalized.apiProtocol] || normalized.apiProtocol;
+    const modelCount = normalized.models.length;
+    return `${host} · ${protocol} · ${modelCount ? `${modelCount} 个模型` : "尚未添加模型"}`;
+  }
+
+  function buildModelsUrl(baseUrl) {
+    const raw = String(baseUrl || "").trim();
+    if (!raw) return "";
+    return `${raw.replace(/\/+$/, "").replace(/\/chat\/completions$/i, "")}/models`;
+  }
+
+  function findServiceById(services, id) {
+    const wanted = String(id || "").trim();
+    if (!wanted) return null;
+    return services.find((service) => service.id === wanted) || null;
+  }
+
+  function pickModelId(service, requestedModelId) {
+    const models = service && Array.isArray(service.models) ? service.models : [];
+    if (!models.length) return "";
+    const wanted = String(requestedModelId || "").trim();
+    return models.some((model) => model.id === wanted) ? wanted : models[0].id;
+  }
+
+  function legacyServiceFields(source, profile) {
+    const immersive = profile === "immersive";
+    const provider = String(immersive ? source.immersiveTranslationProvider : source.translationProvider || "").trim();
+    const apiKey = String(
+      immersive ? source.immersiveTranslationApiKey : source.translationApiKey || source.deepseekApiKey || ""
+    ).trim();
+    const baseUrl = String(immersive ? source.immersiveTranslationBaseUrl : source.translationBaseUrl || "").trim();
+    const model = String(immersive ? source.immersiveTranslationModel : source.translationModel || "").trim();
+    const providerName = provider === "gemini" ? "Gemini" : provider === "deepseek" ? "DeepSeek" : "";
+    return {
+      provider,
+      apiKey,
+      model,
+      // Legacy installs relied on the provider defaults for the endpoint and
+      // the model, so a migrated service keeps translating without edits.
+      defaultModel: providerName === "Gemini" ? GEMINI_MODEL : providerName === "DeepSeek" ? DEEPSEEK_MODEL : "",
+      baseUrl: openAiCompatibleBaseUrl(
+        baseUrl || (providerName === "Gemini" ? GEMINI_BASE_URL : providerName === "DeepSeek" ? DEEPSEEK_BASE_URL : ""),
+        provider
+      )
+    };
+  }
+
+  function serviceFromLegacyFields(fields, id) {
+    const model = fields.model || fields.defaultModel;
+    return {
+      id,
+      name: fields.provider === "gemini" ? "Gemini" : fields.provider === "deepseek" ? "DeepSeek" : hostLabel(fields.baseUrl) || "自定义服务",
+      apiProtocol: DEFAULT_SERVICE_PROTOCOL,
+      baseUrl: fields.baseUrl,
+      apiKey: fields.apiKey,
+      models: model ? [{ id: model, displayName: "" }] : []
+    };
+  }
+
+  // Turns settings written before the provider list existed into editable
+  // service entries. Returns null when there is nothing worth migrating.
+  function migrateLegacyTranslationServices(settings) {
+    const source = Object.assign({}, DEFAULT_SETTINGS, settings || {});
+    const realtime = legacyServiceFields(source, "realtime");
+    const immersive = legacyServiceFields(source, "immersive");
+    const hasRealtime = Boolean(
+      realtime.apiKey || String(source.translationBaseUrl || "").trim() || String(source.translationModel || "").trim()
+    );
+    const hasImmersive = Boolean(String(source.immersiveTranslationProvider || "").trim());
+    if (!hasRealtime && !hasImmersive) return null;
+
+    const services = [];
+    let translationServiceId = "";
+    let translationModelId = "";
+    let immersiveTranslationServiceId = "";
+    let immersiveTranslationModelId = "";
+
+    if (hasRealtime) {
+      const service = serviceFromLegacyFields(realtime, "legacy-realtime");
+      services.push(service);
+      translationServiceId = service.id;
+      translationModelId = pickModelId(service, "");
+    }
+
+    if (hasImmersive) {
+      const shared = services.find(
+        (service) =>
+          service.baseUrl === immersive.baseUrl &&
+          service.apiKey === immersive.apiKey &&
+          pickModelId(service, "") === (immersive.model || immersive.defaultModel)
+      );
+      if (shared) {
+        immersiveTranslationServiceId = shared.id;
+        immersiveTranslationModelId = pickModelId(shared, "");
+      } else {
+        const service = serviceFromLegacyFields(immersive, "legacy-immersive");
+        services.push(service);
+        immersiveTranslationServiceId = service.id;
+        immersiveTranslationModelId = pickModelId(service, "");
+      }
+    }
+
+    return {
+      services,
+      migrated: true,
+      translationServiceId,
+      translationModelId,
+      immersiveTranslationServiceId,
+      immersiveTranslationModelId
+    };
+  }
+
+  // Single source of truth for "which services exist and which one is picked".
+  // Stored services win; settings written before the provider list fall back to
+  // the legacy keys (migrated on the fly so the option pages can edit them).
+  function planTranslationServices(settings) {
+    const source = Object.assign({}, DEFAULT_SETTINGS, settings || {});
+    const services = normalizeTranslationServices(source.translationServices);
+    if (!services.length) {
+      const migrated = migrateLegacyTranslationServices(source);
+      if (migrated) return migrated;
+      return {
+        services: [],
+        migrated: false,
+        translationServiceId: "",
+        translationModelId: "",
+        immersiveTranslationServiceId: "",
+        immersiveTranslationModelId: ""
+      };
+    }
+
+    const translationServiceId =
+      findServiceById(services, source.translationServiceId) ? String(source.translationServiceId).trim() : services[0].id;
+    const immersiveTranslationServiceId = findServiceById(services, source.immersiveTranslationServiceId)
+      ? String(source.immersiveTranslationServiceId).trim()
+      : "";
+    return {
+      services,
+      migrated: false,
+      translationServiceId,
+      translationModelId: pickModelId(findServiceById(services, translationServiceId), source.translationModelId),
+      immersiveTranslationServiceId,
+      immersiveTranslationModelId: pickModelId(
+        findServiceById(services, immersiveTranslationServiceId),
+        source.immersiveTranslationModelId
+      )
+    };
+  }
+
   function resolveTranslationConfig(settings, profile) {
     const source = Object.assign({}, DEFAULT_SETTINGS, settings || {});
+    const immersiveRequested = profile === "immersive";
+    const services = normalizeTranslationServices(source.translationServices);
+
+    // Provider list mode: the sub-pages only choose a service and a model.
+    if (services.length) {
+      const requestedImmersiveId = String(source.immersiveTranslationServiceId || "").trim();
+      let useDedicated = immersiveRequested && Boolean(requestedImmersiveId);
+      let service = findServiceById(services, useDedicated ? requestedImmersiveId : source.translationServiceId);
+      if (!service) {
+        // A deleted dedicated service falls back to inheriting the realtime one.
+        useDedicated = false;
+        service = findServiceById(services, source.translationServiceId) || services[0];
+      }
+      if (service) {
+        const endpoint = service.baseUrl;
+        return {
+          provider: "custom",
+          providerLabel: service.name || "自定义服务",
+          apiStyle: "chat-completions",
+          apiKey: service.apiKey,
+          baseUrl: endpoint,
+          chatCompletionsUrl: buildChatCompletionsUrl(endpoint),
+          generateContentUrl: "",
+          model: pickModelId(service, useDedicated ? source.immersiveTranslationModelId : source.translationModelId),
+          useJsonResponseFormat: useDedicated
+            ? source.immersiveTranslationJsonResponse !== false
+            : source.translationJsonResponse !== false,
+          includeDeepSeekThinkingFlag: false
+        };
+      }
+    }
+
     const useImmersiveConfig =
-      profile === "immersive" && Boolean(String(source.immersiveTranslationProvider || "").trim());
+      immersiveRequested && Boolean(String(source.immersiveTranslationProvider || "").trim());
     const providerValue = useImmersiveConfig
       ? source.immersiveTranslationProvider
       : source.translationProvider;
@@ -220,6 +486,7 @@
     SENTENCE_SEGMENTATION_VERSION,
     DEEPSEEK_BASE_URL,
     GEMINI_BASE_URL,
+    TRANSLATION_SERVICE_PROTOCOLS,
     DEFAULT_CACHE_MAX_ITEMS,
     sourceLanguageLabel,
     targetLanguageLabel,
@@ -228,6 +495,14 @@
     makeCacheKey,
     buildChatCompletionsUrl,
     buildGeminiGenerateContentUrl,
+    openAiCompatibleBaseUrl,
+    normalizeTranslationServices,
+    describeTranslationService,
+    buildModelsUrl,
+    findTranslationService: findServiceById,
+    pickModelId,
+    migrateLegacyTranslationServices,
+    planTranslationServices,
     resolveTranslationConfig
   });
 });

@@ -174,6 +174,244 @@ p {
   color: #475569;
 }
 
+.link-button {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: #2563eb;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  background: none;
+  color: #1d4ed8;
+}
+
+/* ── 翻译服务 page ───────────────────────────────────────────────── */
+
+.subsection {
+  margin-top: 26px;
+  padding-top: 20px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.subsection h3 {
+  margin: 0 0 12px;
+  font-size: 15px;
+  line-height: 1.3;
+}
+
+.service-list {
+  display: grid;
+  gap: 12px;
+}
+
+.service-card {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid #d8dee9;
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.service-card.is-builtin {
+  background: #fff;
+}
+
+.service-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.service-name {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.3;
+}
+
+.service-name.is-unnamed {
+  color: #6b7280;
+}
+
+.service-tag {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.service-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.service-desc {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 13px;
+  color: #475569;
+}
+
+.service-desc-label {
+  color: #94a3b8;
+  font-weight: 700;
+}
+
+.service-models {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.service-model {
+  padding: 3px 9px;
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  background: #fff;
+  font-size: 12px;
+  color: #1f2937;
+}
+
+.service-model span {
+  color: #6b7280;
+}
+
+.service-empty {
+  margin: 0 0 12px;
+  color: #6b7280;
+}
+
+.service-empty[hidden] {
+  display: none;
+}
+
+.inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+button.ghost {
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #1f2937;
+  padding: 5px 10px;
+  font-size: 13px;
+}
+
+button.ghost:hover {
+  background: #f1f5f9;
+}
+
+button.ghost.danger {
+  border-color: #fecaca;
+  color: #b91c1c;
+}
+
+button.ghost.danger:hover {
+  background: #fef2f2;
+}
+
+/* ── provider dialog ─────────────────────────────────────────────── */
+
+.modal[hidden] {
+  display: none;
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 24px 16px;
+  overflow-y: auto;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.modal-panel {
+  position: relative;
+  box-sizing: border-box;
+  width: min(560px, 100%);
+  margin: auto;
+  padding: 22px;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.22);
+}
+
+.modal-panel h2 {
+  margin-bottom: 16px;
+}
+
+.model-rows {
+  display: grid;
+  gap: 8px;
+}
+
+.model-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.model-row input {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font: inherit;
+}
+
+.model-row input:focus {
+  border-color: #2563eb;
+  outline: 3px solid rgba(37, 99, 235, 0.14);
+}
+
+.icon-button {
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  color: #64748b;
+  padding: 6px 10px;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.icon-button:hover {
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+
 .field {
   display: grid;
   gap: 8px;
@@ -314,5 +552,21 @@ button.secondary:hover {
 
   .panel {
     padding: 16px;
+  }
+
+  .model-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  }
+
+  .modal {
+    padding: 12px 10px;
+  }
+
+  .modal-panel {
+    padding: 16px;
+  }
+
+  .service-actions {
+    margin-left: 0;
   }
 }

@@ -40,21 +40,28 @@ No build step or npm installation is needed to load the extension. Node.js depen
 
 ### 2. Configure your API
 
-The settings page has three independent sub-pages on the left: **实时字幕** (Real-time subtitles), **沉浸式翻译** (Immersive translation) and **通用设置** (General). Only one is shown at a time instead of stacking every group into one long page. The `#realtime-api`, `#immersive-api` and `#general-settings` hashes open a specific sub-page directly, and the browser back/forward buttons move between them. **保存设置** (Save) and **清空翻译缓存** (Clear cache) apply to all three sub-pages.
+The settings page has four independent sub-pages on the left: **翻译服务** (Translation services), **实时字幕** (Real-time subtitles), **沉浸式翻译** (Immersive translation) and **通用设置** (General). Only one is shown at a time instead of stacking every group into one long page. The `#translation-services`, `#realtime-api`, `#immersive-api` and `#general-settings` hashes open a specific sub-page directly, and the browser back/forward buttons move between them. **保存设置** (Save) and **清空翻译缓存** (Clear cache) apply to every sub-page.
 
-Under **实时字幕翻译 API** (Real-time subtitle API), enter:
+Add providers on the **翻译服务** page first: click **添加自定义供应方** (Add custom provider) and fill in the dialog:
 
 | Setting | What to enter |
 | --- | --- |
-| Translation service | **OpenAI-compatible API**, the only service type in the settings UI |
-| API Key | Your provider's API key |
-| Base URL | Your provider's Chat Completions base URL, including its version path if required |
-| Model | An exact model ID available through that endpoint |
-| JSON output mode | Enabled by default; disable it if your endpoint rejects JSON response mode |
+| 供应方名称 (Provider name) | A recognizable name, for example "relay service" |
+| API 地址 (API address) | Your provider's Chat Completions base URL, including its version path if required |
+| API 协议 (API protocol) | `openai-compatible`, currently the only protocol |
+| 密钥 (Key) | Your provider's API key |
+| 模型目录 (Model catalog) | One **model id** plus an optional **display name** per row; **添加** adds a row, **获取可用模型** fetches `{API address}/models`, and the × button removes a row |
 
-For example, `https://api.example.com/v1` becomes `https://api.example.com/v1/chat/completions`. A complete URL ending in `/chat/completions` is also accepted. This is a placeholder: replace it with your provider's actual endpoint. Do not enter a website homepage or a native API endpoint with a different protocol.
+For example, `https://api.example.com/v1` becomes `https://api.example.com/v1/chat/completions` and **获取可用模型** requests `https://api.example.com/v1/models`. This is a placeholder: replace it with your provider's actual endpoint. Do not enter a website homepage or a native API endpoint with a different protocol.
 
-Under **沉浸式翻译 API** (Immersive translation API), keep **沿用实时字幕 API** to share these settings, or select **OpenAI-compatible API** and fill in a separate key, base URL, and model.
+A provider can hold several models, and you can add several providers; **编辑** (Edit) and **删除** (Delete) on each card change them at any time. **其他翻译服务** (Other services) lists the built-in **谷歌翻译** (Google Translate) keyless endpoint, which is only used as the webpage fallback configured on the **沉浸式翻译** page.
+
+The **实时字幕** and **沉浸式翻译** pages then only pick from that list — no address or key fields:
+
+- **实时字幕翻译 API** (Real-time subtitle API): choose a **翻译服务** (provider) and a **模型** (model). **请求 JSON 输出模式** (JSON output mode) is enabled by default; disable it if your endpoint rejects JSON response mode.
+- **沉浸式翻译 API** (Immersive translation API): **沿用实时字幕服务** (inherit the realtime provider) is the default and also inherits the model. Pick another provider and model to call a dedicated one; the JSON output toggle only applies to a dedicated provider.
+
+Settings saved by older versions are migrated automatically: opening the settings page turns the single legacy API configuration into one provider entry without losing the key, address or model.
 
 The **Google 翻译兜底** (Google fallback) selector is off by default. It provides two optional fallbacks for webpages:
 

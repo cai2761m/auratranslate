@@ -21,6 +21,7 @@
     GEMINI_MODEL: Shared.GEMINI_MODEL,
     DEEPSEEK_BASE_URL: Shared.DEEPSEEK_BASE_URL,
     GEMINI_BASE_URL: Shared.GEMINI_BASE_URL,
+    TRANSLATION_SERVICE_PROTOCOLS: Shared.TRANSLATION_SERVICE_PROTOCOLS,
     MERGE_VERSION: Shared.MERGE_VERSION,
     SENTENCE_SEGMENTATION_VERSION: Shared.SENTENCE_SEGMENTATION_VERSION,
     DEFAULT_CACHE_MAX_ITEMS: Shared.DEFAULT_CACHE_MAX_ITEMS,
@@ -51,6 +52,14 @@
     makeCacheKey: Shared.makeCacheKey,
     buildChatCompletionsUrl: Shared.buildChatCompletionsUrl,
     buildGeminiGenerateContentUrl: Shared.buildGeminiGenerateContentUrl,
+    openAiCompatibleBaseUrl: Shared.openAiCompatibleBaseUrl,
+    normalizeTranslationServices: Shared.normalizeTranslationServices,
+    describeTranslationService: Shared.describeTranslationService,
+    buildModelsUrl: Shared.buildModelsUrl,
+    findTranslationService: Shared.findTranslationService,
+    pickModelId: Shared.pickModelId,
+    migrateLegacyTranslationServices: Shared.migrateLegacyTranslationServices,
+    planTranslationServices: Shared.planTranslationServices,
     resolveTranslationConfig: Shared.resolveTranslationConfig,
     parseDeepSeekTranslationContent: Shared.parseDeepSeekTranslationContent
   };

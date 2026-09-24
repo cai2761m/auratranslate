@@ -104,6 +104,9 @@ function bindStorageChanges() {
 
     const realtimeApiChanged = Boolean(
       changes.deepseekApiKey ||
+      changes.translationServices ||
+      changes.translationServiceId ||
+      changes.translationModelId ||
       changes.translationProvider ||
       changes.translationApiKey ||
       changes.translationBaseUrl ||
