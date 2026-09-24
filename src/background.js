@@ -461,7 +461,8 @@ async function handleImmersiveTranslate(message) {
       sourceText: item && item.formattedText
         ? String(item.formattedText).replace(/\s+/g, " ").trim()
         : Core.normalizeSubtitleText(item && item.sourceText),
-      plainText: Core.normalizeSubtitleText(item && item.sourceText)
+      plainText: Core.normalizeSubtitleText(item && item.sourceText),
+      hasFormatting: Boolean(item && item.formattedText)
     }))
     .filter((item) => item.id && item.sourceText);
 
@@ -494,10 +495,10 @@ async function handleImmersiveTranslate(message) {
   for (const cue of uniqueCues.values()) {
     const stored = storedItems[cue.id];
     const legacy = storedItems[cue.plainId];
-    if (stored && stored.sourceText === cue.sourceText && typeof stored.translatedText === "string" && stored.translatedText.trim()) {
-      results.set(cue.id, { translatedText: stored.translatedText, cached: true });
-    } else if (legacy && legacy.sourceText === cue.plainText && typeof legacy.translatedText === "string" && legacy.translatedText.trim()) {
-      results.set(cue.id, { translatedText: legacy.translatedText, cached: true });
+    if (usableImmersiveCache(stored, cue.sourceText, cue.hasFormatting)) {
+      results.set(cue.id, { translatedText: stored.translatedText, translationProvider: stored.translationProvider, cached: true });
+    } else if (usableImmersiveCache(legacy, cue.plainText, cue.hasFormatting)) {
+      results.set(cue.id, { translatedText: legacy.translatedText, translationProvider: legacy.translationProvider, cached: true });
     } else if (message.cacheOnly === true && completedCueTranslations.has(inFlightCueKey(cacheKey, cue.id, cue.sourceText))) {
       // A successful provider response is still usable while storage is slow
       // or full. Cache probes must never call the provider to recover it.
@@ -526,7 +527,8 @@ async function handleImmersiveTranslate(message) {
           const cue = uniqueCues.get(String(item.id));
           if (cue && item.translatedText) {
             newItems[cue.id] = { sourceText: cue.sourceText, translatedText: item.translatedText,
-              translationProvider: item.translationProvider || translationConfig.provider };
+              translationProvider: item.translationProvider || translationConfig.provider,
+              googleTranslationVersion: item.googleTranslationVersion };
           }
         }
         const maxItems = Number(settings.translationCacheMaxItems) || Core.DEFAULT_CACHE_MAX_ITEMS;
@@ -556,6 +558,13 @@ async function immersiveFingerprint(value) {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+function usableImmersiveCache(entry, sourceText, hasFormatting) {
+  if (!entry || entry.sourceText !== sourceText || typeof entry.translatedText !== "string" || !entry.translatedText.trim()) return false;
+  // Only obsolete Google formatting results need replacing. Preserve AI and
+  // plain-text caches, and never initiate a request during cache-only probes.
+  return !hasFormatting || !["google-free", "google-cloud"].includes(entry.translationProvider) || entry.googleTranslationVersion === 2;
+}
+
 // Fallback is opt-in and belongs inside in-flight deduplication. Storage errors
 // must never be mistaken for provider failures and trigger another paid call.
 async function translateImmersiveWithFallback(request, settings, retain) {
@@ -579,7 +588,7 @@ async function translateImmersiveWithFallback(request, settings, retain) {
   for (const cue of missing) {
     let translatedText;
     try {
-      translatedText = await translateGoogleCue(cue.sourceText, request, settings, deadline);
+      translatedText = await translateGoogleCue(cue.sourceText, request, settings, deadline, cue.hasFormatting);
     } catch (error) {
       // Earlier successes are already cached. Return them so the page can render
       // partial progress; a subsequent click only requests missing paragraphs.
@@ -588,45 +597,85 @@ async function translateImmersiveWithFallback(request, settings, retain) {
       failure.requestMayHaveReachedProvider = Boolean(primaryError?.requestMayHaveReachedProvider || error.requestMayHaveReachedProvider);
       throw failure;
     }
-    const item = { id: cue.id, translatedText, translationProvider: settings.immersiveFallbackProvider };
+    const item = { id: cue.id, translatedText, translationProvider: settings.immersiveFallbackProvider, googleTranslationVersion: 2 };
     await retain([item]);
     items.push(item);
   }
   return items;
 }
 
-// Keep formatting markers and code local. Google receives only translatable
-// text spans; its output is rendered by the existing safe text/marker renderer.
-function googleTextParts(text) {
-  const parts = [];
-  const protectedTags = [];
-  for (const token of String(text).split(/(\[\[\/?YTBT_[A-Z]+_\d+\]\])/g)) {
-    const marker = token.match(/^\[\[(\/?)YTBT_([A-Z]+)_\d+\]\]$/);
-    if (marker) {
-      if (["CODE", "KBD", "SAMP"].includes(marker[2])) {
-        if (marker[1]) protectedTags.pop();
-        else protectedTags.push(marker[2]);
-      }
-      parts.push({ text: token });
-    } else if (protectedTags.length || !token.trim()) {
-      parts.push({ text: token });
-    } else {
-      // Code points avoid splitting surrogate pairs. Prefer a word boundary.
-      const points = Array.from(token);
-      while (points.length) {
-        let end = Math.min(points.length, 1000);
-        if (end < points.length) {
-          for (let i = end - 1; i > end / 2; i--) {
-            if (/\s/.test(points[i])) { end = i + 1; break; }
-          }
-        }
-        const chunk = points.splice(0, end).join("");
-        const match = chunk.match(/^(\s*)([\s\S]*?)(\s*)$/);
-        parts.push({ text: match[2], translate: Boolean(match[2]), before: match[1], after: match[3] });
-      }
+// Translate whole paragraphs, including inline identifiers and formatting.
+// Only oversized paragraphs are split, outside formatting and preferably at
+// sentence boundaries. No fragment may separate code from its surrounding words
+// merely because a code/link/emphasis element starts or ends there.
+function googleParagraphChunks(text, hasFormatting) {
+  const tokens = hasFormatting ? text.split(/(\[\[\/?YTBT_[A-Z]+_\d+\]\])/g) : [text];
+  const units = [];
+  let depth = 0;
+  let formatted = "";
+  for (const token of tokens) {
+    if (hasFormatting && /^\[\[YTBT_/.test(token)) depth++;
+    if (depth) formatted += token;
+    else units.push(...Array.from(token));
+    if (hasFormatting && /^\[\[\/YTBT_/.test(token)) {
+      depth--;
+      if (!depth) { units.push(formatted); formatted = ""; }
     }
   }
-  return parts;
+  if (depth || formatted) throw new Error("网页格式标记不完整，无法翻译。");
+  const chunks = [];
+  for (let start = 0; start < units.length;) {
+    let end = start;
+    let count = 0;
+    let sentenceEnd = start;
+    let wordEnd = start;
+    while (end < units.length && count + Array.from(units[end]).length <= 4000) {
+      count += Array.from(units[end]).length;
+      if (/^\s$/.test(units[end])) {
+        wordEnd = end + 1;
+        if (/[.!?。！？]["'”’)]?$/.test(units[end - 1] || "")) sentenceEnd = end + 1;
+      }
+      end++;
+    }
+    if (end === start) throw new Error("单个格式片段过长，请改用 AI 翻译。");
+    if (end < units.length) end = sentenceEnd > start ? sentenceEnd : wordEnd > start ? wordEnd : end;
+    chunks.push(units.slice(start, end).join(""));
+    start = end;
+  }
+  return chunks;
+}
+
+function restoreGoogleFormatting(source, translated) {
+  const invalid = () => new Error("Google 未完整保留网页格式标记，请改用 AI 翻译。");
+  function read(text) {
+    const formats = new Map();
+    const stack = [];
+    const marker = /\[\[(\/?)YTBT_([A-Z]+_\d+)\]\]/g;
+    for (const match of text.matchAll(marker)) {
+      const [, closing, key] = match;
+      if (closing) {
+        if (stack.pop() !== key) throw invalid();
+        const entry = formats.get(key);
+        entry.inner = text.slice(entry.start, match.index);
+      } else {
+        if (formats.has(key)) throw invalid();
+        formats.set(key, { parent: stack.at(-1), start: match.index + match[0].length });
+        stack.push(key);
+      }
+    }
+    if (stack.length || /\[\[\/?YTBT_/i.test(text.replace(marker, ""))) throw invalid();
+    return formats;
+  }
+  const expected = read(source);
+  const actual = read(translated);
+  if (expected.size !== actual.size) throw invalid();
+  for (const [key, entry] of expected) {
+    if (!actual.has(key) || actual.get(key).parent !== entry.parent) throw invalid();
+  }
+  // Identifiers and line breaks come from the page even if Google translated
+  // their contents. Everything else stays in the provider's translated order.
+  return translated.replace(/\[\[YTBT_((?:CODE|KBD|SAMP|BR)_\d+)\]\][\s\S]*?\[\[\/YTBT_\1\]\]/g,
+    (_, key) => `[[YTBT_${key}]]${expected.get(key).inner}[[/YTBT_${key}]]`);
 }
 
 let googleActiveRequests = 0;
@@ -644,20 +693,17 @@ async function withGoogleSlot(work) {
   }
 }
 
-async function translateGoogleCue(text, request, settings, deadline) {
+async function translateGoogleCue(text, request, settings, deadline, hasFormatting = false) {
   const cloud = settings.immersiveFallbackProvider === "google-cloud";
   const apiKey = String(settings.immersiveGoogleApiKey || "").trim();
   if (cloud && !apiKey) throw new Error("请填写 Google Cloud Translation API Key。");
-  const parts = googleTextParts(text);
-  const jobs = parts.filter((part) => part.translate);
-  for (let offset = 0; offset < jobs.length;) {
-    const batch = [];
-    let chars = 0;
-    while (offset < jobs.length && batch.length < (cloud ? 128 : 1) && chars + jobs[offset].text.length <= 4000) {
-      const part = jobs[offset++];
-      batch.push(part);
-      chars += part.text.length;
-    }
+  if (hasFormatting) restoreGoogleFormatting(text, text);
+  const parts = googleParagraphChunks(text, hasFormatting).map((part) => {
+    const [, before, content, after] = part.match(/^(\s*)([\s\S]*?)(\s*)$/);
+    return { text: content, before, after };
+  });
+  for (const part of parts) {
+    const batch = [part];
     const translations = await withGoogleSlot(async () => {
       if (!cloud && Date.now() < googleFreeCooldownUntil) throw new Error("免 Key 接口暂不可用，冷却 60 秒后可手动重试，或切换官方接口。");
       const remaining = deadline - Date.now();
@@ -698,7 +744,8 @@ async function translateGoogleCue(text, request, settings, deadline) {
     });
     batch.forEach((part, index) => { part.text = translations[index]; });
   }
-  return parts.map((part) => `${part.before || ""}${part.text}${part.after || ""}`).join("");
+  const translated = parts.map((part) => `${part.before}${part.text}${part.after}`).join("");
+  return hasFormatting ? restoreGoogleFormatting(text, translated) : translated;
 }
 
 function decodeGoogleEntities(text) {

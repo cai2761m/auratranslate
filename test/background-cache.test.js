@@ -233,7 +233,7 @@ test("Google only fills missing AI paragraphs and preserves primary results", as
   assert.equal(fixture.fetchCount, 2);
 });
 
-test("official Google uses a separate key, batches text spans and preserves formatting and code", async () => {
+test("official Google sends a whole paragraph with a separate key and restores code exactly", async () => {
   const fixture = createFixture({ translationApiKey: "", immersiveFallbackProvider: "google-cloud", immersiveGoogleApiKey: "cloud-key", sourceLanguage: "auto", targetLanguage: "zh-TW" });
   const formattedText = 'Read [[YTBT_A_0]]the guide[[/YTBT_A_0]] and [[YTBT_CODE_1]]foo<T>()[[/YTBT_CODE_1]].';
   fixture.hooks.fetch = (url, options) => {
@@ -245,14 +245,168 @@ test("official Google uses a separate key, batches text spans and preserves form
     assert.equal(body.target, "zh-TW");
     assert.equal(body.format, "text");
     assert.equal(body.model, "nmt");
-    assert.deepEqual(body.q, ["Read", "the guide", "and", "."]);
-    return jsonResponse({ data: { translations: body.q.map(() => ({ translatedText: "譯文 &amp; &#39; &lt;b&gt;" })) } });
+    assert.deepEqual(body.q, [formattedText]);
+    return jsonResponse({ data: { translations: [{ translatedText: "閱讀 [[YTBT_A_0]]指南 &amp; &#39; &lt;b&gt;[[/YTBT_A_0]]和 [[YTBT_CODE_1]]被錯誤翻譯的代碼[[/YTBT_CODE_1]]。" }] } });
   };
   const result = await fixture.startWorker().request(immersiveMessage([], { items: [{ id: "im0", sourceText: "Read the guide and foo<T>().", formattedText }] }));
   assert.equal(result.ok, true);
   assert.match(result.items[0].translatedText, /\[\[YTBT_CODE_1\]\]foo<T>\(\)\[\[\/YTBT_CODE_1\]\]/);
-  assert.match(result.items[0].translatedText, /\[\[YTBT_A_0\]\]譯文 & ' <b>\[\[\/YTBT_A_0\]\]/);
+  assert.match(result.items[0].translatedText, /\[\[YTBT_A_0\]\]指南 & ' <b>\[\[\/YTBT_A_0\]\]/);
   assert.equal(fixture.fetchCount, 1);
+});
+
+test("free Google translates the FittedBox paragraph in one request and preserves reordered markers", async () => {
+  const fixture = createFixture({ immersiveTranslationService: "google-free" });
+  const formattedText = "But what happens if you put the [[YTBT_CODE_0]]FittedBox[[/YTBT_CODE_0]] inside of a [[YTBT_CODE_1]]Center[[/YTBT_CODE_1]] widget? The [[YTBT_CODE_2]]Center[[/YTBT_CODE_2]] lets the [[YTBT_CODE_3]]FittedBox[[/YTBT_CODE_3]] be any size it wants, up to the screen size.";
+  const translatedText = "但是，如果在 [[YTBT_CODE_1]]Center[[/YTBT_CODE_1]] 组件中放入 [[YTBT_CODE_0]]FittedBox[[/YTBT_CODE_0]]，会发生什么？[[YTBT_CODE_2]]Center[[/YTBT_CODE_2]] 允许 [[YTBT_CODE_3]]FittedBox[[/YTBT_CODE_3]] 自由选择大小，但不能超过屏幕尺寸。";
+  const message = immersiveMessage([], { items: [{ id: "im0", sourceText: formattedText.replace(/\[\[\/?YTBT_[A-Z]+_\d+\]\]/g, ""), formattedText }] });
+  fixture.hooks.fetch = (url) => {
+    assert.equal(new URL(url).searchParams.get("q"), formattedText);
+    return freeGoogleResponse(translatedText);
+  };
+  const response = await fixture.startWorker().request(message);
+  assert.equal(response.ok, true);
+  assert.equal(response.items[0].translatedText, translatedText);
+  assert.equal(response.items[0].translationProvider, "google-free");
+  const cached = await fixture.startWorker().request({ ...message, cacheOnly: true });
+  assert.equal(cached.items[0].translatedText, translatedText);
+  assert.equal(cached.items[0].translationProvider, "google-free");
+  assert.equal(fixture.fetchCount, 1);
+});
+
+test("page-to-worker Google translation renders whole sentences and restores code and links", async (t) => {
+  const { JSDOM } = require("jsdom");
+  const fixture = createFixture({ immersiveTranslationService: "google-free" });
+  const worker = fixture.startWorker();
+  const html = '<main><p>But what happens if you put the <code>FittedBox</code> inside of a <code>Center</code> widget? Read <a href="/guide"><strong>the guide</strong></a>.</p></main>';
+  fixture.hooks.fetch = (url) => {
+    const text = new URL(url).searchParams.get("q");
+    assert.equal(text, "But what happens if you put the [[YTBT_CODE_0]]FittedBox[[/YTBT_CODE_0]] inside of a [[YTBT_CODE_1]]Center[[/YTBT_CODE_1]] widget? Read [[YTBT_A_2]][[YTBT_STRONG_3]]the guide[[/YTBT_STRONG_3]][[/YTBT_A_2]].");
+    return freeGoogleResponse("如果在 [[YTBT_CODE_1]]Center[[/YTBT_CODE_1]] 中放入 [[YTBT_CODE_0]]FittedBox[[/YTBT_CODE_0]]，会怎样？阅读[[YTBT_A_2]][[YTBT_STRONG_3]]指南[[/YTBT_STRONG_3]][[/YTBT_A_2]]。");
+  };
+  for (let load = 0; load < 2; load++) {
+    const dom = new JSDOM(html, { url: "https://docs.example.com/guide", runScripts: "outside-only", pretendToBeVisual: true });
+    t.after(() => dom.window.close());
+    const { window } = dom;
+    window.HTMLElement.prototype.getBoundingClientRect = () => ({ width: 400, height: 30, top: 0, bottom: 30 });
+    const computedStyle = window.getComputedStyle.bind(window);
+    window.getComputedStyle = (element) => {
+      const style = computedStyle(element);
+      return { display: style.display, visibility: style.visibility, opacity: style.opacity || "1", getPropertyValue: style.getPropertyValue.bind(style) };
+    };
+    window.chrome = { runtime: {}, storage: { local: {
+      get: (defaults, done) => done({ ...defaults, ...fixture.storage }), set: (_, done) => done()
+    } } };
+    window.eval(fs.readFileSync(path.join(__dirname, "../src/shared.js"), "utf8"));
+    window.YTBTCore = { ...window.YTBTCore, sendRuntimeMessage: (_, message) => worker.request(message) };
+    window.eval(fs.readFileSync(path.join(__dirname, "../src/immersive.js"), "utf8"));
+    const ball = window.document.querySelector(".ytbt-immersive-tab");
+    ball.click();
+    for (let turn = 0; turn < 100 && ball.dataset.ytbtState === "translating"; turn++) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(ball.dataset.ytbtState, "done");
+    const result = window.document.querySelector(".ytbt-immersive-text");
+    assert.equal(result.textContent, "如果在 Center 中放入 FittedBox，会怎样？阅读指南。");
+    assert.deepEqual(Array.from(result.querySelectorAll("code"), (node) => node.textContent), ["Center", "FittedBox"]);
+    assert.equal(result.querySelector("a").getAttribute("href"), "/guide");
+    assert.equal(result.querySelector("a strong").textContent, "指南");
+    dom.window.close();
+  }
+  assert.equal(fixture.fetchCount, 1, "reloading the page uses the corrected cache with no provider call");
+});
+
+test("Google preserves nested links, emphasis, breaks and literal code without fragment requests", async () => {
+  const fixture = createFixture({ immersiveTranslationService: "google-free" });
+  const formattedText = "Read [[YTBT_A_0]][[YTBT_STRONG_1]]the guide[[/YTBT_STRONG_1]][[/YTBT_A_0]][[YTBT_BR_2]][[/YTBT_BR_2]]then [[YTBT_KBD_3]]Enter[[/YTBT_KBD_3]] shows [[YTBT_SAMP_4]]ready[[/YTBT_SAMP_4]].";
+  const translated = formattedText.replace("the guide", "指南").replace("Enter", "回车").replace("ready", "就绪");
+  fixture.hooks.fetch = (url) => {
+    assert.equal(new URL(url).searchParams.get("q"), formattedText);
+    return freeGoogleResponse(translated);
+  };
+  const response = await fixture.startWorker().request(immersiveMessage([], { items: [{ id: "im0", sourceText: "Read the guide then Enter shows ready.", formattedText }] }));
+  assert.equal(response.ok, true);
+  assert.equal(response.items[0].translatedText, formattedText.replace("the guide", "指南"));
+  assert.equal(fixture.fetchCount, 1);
+});
+
+test("Google rejects missing, duplicated, unknown or misnested markers without retrying or caching", async (t) => {
+  const formattedText = "Read [[YTBT_A_0]][[YTBT_EM_1]]the guide[[/YTBT_EM_1]][[/YTBT_A_0]].";
+  const invalid = [
+    "阅读指南。",
+    formattedText + "[[YTBT_EM_1]]again[[/YTBT_EM_1]]",
+    formattedText.replaceAll("EM_1", "EM_9"),
+    "[[YTBT_EM_1]][[YTBT_A_0]]指南[[/YTBT_EM_1]][[/YTBT_A_0]]",
+    "[[YTBT_A_0]]指南[[/YTBT_A_0]][[YTBT_EM_1]]指南[[/YTBT_EM_1]]"
+  ];
+  for (const translatedText of invalid) {
+    await t.test(translatedText, async () => {
+      const fixture = createFixture({ immersiveTranslationService: "google-free" });
+      fixture.hooks.fetch = () => freeGoogleResponse(translatedText);
+      const worker = fixture.startWorker();
+      const message = immersiveMessage([], { items: [{ id: "im0", sourceText: "Read the guide.", formattedText }] });
+      const response = await worker.request(message);
+      assert.equal(response.ok, false);
+      assert.match(response.errors[0].message, /格式标记/);
+      assert.equal((await worker.request({ ...message, cacheOnly: true })).items.length, 0);
+      assert.equal(fixture.fetchCount, 1);
+      assert.equal(translationCaches(fixture).length, 0);
+    });
+  }
+});
+
+test("only obsolete formatted Google cache entries are replaced; AI and plain caches survive", async () => {
+  const fixture = createFixture({ translationApiKey: "", immersiveFallbackProvider: "google-free" });
+  const message = immersiveMessage([], { items: [
+    { id: "im0", sourceText: "Use FittedBox inside Center.", formattedText: "Use [[YTBT_CODE_0]]FittedBox[[/YTBT_CODE_0]] inside [[YTBT_CODE_1]]Center[[/YTBT_CODE_1]]." },
+    { id: "im1", sourceText: "An ordinary paragraph." },
+    { id: "im2", sourceText: "Read the guide.", formattedText: "Read [[YTBT_A_0]]the guide[[/YTBT_A_0]]." }
+  ] });
+  fixture.hooks.fetch = (url) => freeGoogleResponse(new URL(url).searchParams.get("q"));
+  assert.equal((await fixture.startWorker().request(message)).items.length, 3);
+  const entries = Object.values(translationCaches(fixture)[0][1].items);
+  for (const entry of entries) delete entry.googleTranslationVersion;
+  entries.find((entry) => entry.sourceText.startsWith("Read")).translationProvider = "custom";
+  const restarted = fixture.startWorker();
+  const probe = await restarted.request({ ...message, cacheOnly: true });
+  assert.deepEqual(Array.from(probe.items, (item) => item.id), ["im1", "im2"]);
+  assert.equal(fixture.fetchCount, 3, "cache probes never start replacement requests");
+  fixture.hooks.fetch = (url) => {
+    assert.equal(new URL(url).searchParams.get("q"), message.items[0].formattedText);
+    return freeGoogleResponse(message.items[0].formattedText);
+  };
+  assert.equal((await restarted.request(message)).items.length, 3);
+  assert.equal((await fixture.startWorker().request({ ...message, cacheOnly: true })).items.length, 3);
+  assert.equal(fixture.fetchCount, 4);
+});
+
+test("obsolete plain-key Google entries cannot bypass formatted cache migration", async () => {
+  const fixture = createFixture({ immersiveTranslationService: "google-free" });
+  fixture.hooks.fetch = () => freeGoogleResponse("旧译文");
+  await fixture.startWorker().request(immersiveMessage(["Use FittedBox."]));
+  for (const entry of Object.values(translationCaches(fixture)[0][1].items)) delete entry.googleTranslationVersion;
+  const response = await fixture.startWorker().request(immersiveMessage([], { cacheOnly: true, items: [
+    { id: "im0", sourceText: "Use FittedBox.", formattedText: "Use [[YTBT_CODE_0]]FittedBox[[/YTBT_CODE_0]]." }
+  ] }));
+  assert.equal(response.items.length, 0);
+  assert.equal(fixture.fetchCount, 1);
+});
+
+test("long Google paragraphs split at sentence boundaries without breaking formatting or losing whitespace", async () => {
+  const fixture = createFixture({ immersiveTranslationService: "google-free" });
+  const sentence = "Read [[YTBT_A_0]]the guide[[/YTBT_A_0]]. ";
+  const formattedText = sentence + "word ".repeat(900) + "[[YTBT_CODE_1]]foo<T>() 😀[[/YTBT_CODE_1]].";
+  const requests = [];
+  fixture.hooks.fetch = (url) => {
+    const q = new URL(url).searchParams.get("q");
+    requests.push(q);
+    assert.ok(Array.from(q).length <= 4000);
+    return freeGoogleResponse(q);
+  };
+  const result = await fixture.startWorker().request(immersiveMessage([], { items: [{ id: "im0", sourceText: "Long paragraph", formattedText }] }));
+  assert.equal(result.ok, true);
+  assert.equal(requests[0], sentence.trim());
+  assert.equal(result.items[0].translatedText, formattedText);
 });
 
 test("Google rate limits cool down without retries and earlier successes remain cached", async () => {
@@ -305,14 +459,14 @@ test("free Google bounds long Unicode input and global concurrency", async () =>
     active++;
     peak = Math.max(peak, active);
     const text = new URL(url).searchParams.get("q");
-    assert.ok(Array.from(text).length <= 1000);
+    assert.ok(Array.from(text).length <= 4000);
     assert.ok(!/[\ud800-\udfff]/u.test(text), "no isolated surrogate halves");
     await new Promise((resolve) => setImmediate(resolve));
     active--;
     return freeGoogleResponse(text);
   };
   const worker = fixture.startWorker();
-  const results = await Promise.all(["A", "B", "C", "D"].map((prefix) => worker.request(immersiveMessage([prefix + "😀".repeat(1500)]))));
+  const results = await Promise.all(["A", "B", "C", "D"].map((prefix) => worker.request(immersiveMessage([prefix + "😀".repeat(4500)]))));
   assert.ok(results.every((response) => response.ok && response.items.length === 1));
   assert.equal(peak, 2);
   assert.equal(fixture.fetchCount, 8);
