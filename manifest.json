@@ -1,8 +1,14 @@
 {
   "manifest_version": 3,
   "name": "AuraTranslate",
-  "version": "0.3.13",
+  "version": "0.3.14",
   "description": "AuraTranslate - AI bilingual subtitles and immersive webpage translation on desktop and Android Firefox",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "browser_specific_settings": {
     "gecko": {
       "id": "auratranslate@cai2761m.github.io",
@@ -67,6 +73,12 @@
   },
   "action": {
     "default_title": "AuraTranslate",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    },
     "default_popup": "popup/popup.html"
   }
 }
