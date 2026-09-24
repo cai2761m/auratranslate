@@ -745,7 +745,7 @@ function startBackground(storage, providerCalls) {
 
 test("real content/background pipeline resumes partial windows after worker restart without provider calls", async () => {
   const storage = sharedStorage();
-  Object.assign(storage.data, Core.DEFAULT_SETTINGS, { deepseekApiKey: "fake-key" });
+  Object.assign(storage.data, Core.DEFAULT_SETTINGS, { translationApiKey: "fake-key" });
   const providerCalls = [];
   const page = await startIncremental(storage, new Map(), { dispatch: startBackground(storage, providerCalls) });
   await settle(page);

@@ -30,7 +30,11 @@ async function optionsPage(storage) {
     document: { querySelector(selector) { return elements.get(selector) || null; } },
     chrome: { storage: { local: {
       get(defaults, callback) { callback({ ...defaults, ...storage }); },
-      set(values, callback) { Object.assign(storage, values); callback(); }
+      set(values, callback) { Object.assign(storage, values); callback(); },
+      remove(keys, callback) {
+        for (const key of Array.isArray(keys) ? keys : [keys]) delete storage[key];
+        callback();
+      }
     } } },
     setTimeout() {}
   });

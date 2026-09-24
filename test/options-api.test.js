@@ -34,7 +34,11 @@ async function openSettings(t, storage) {
   dom.window.YTBTCore = Core;
   dom.window.chrome = { storage: { local: {
     get(defaults, callback) { callback({ ...defaults, ...storage }); },
-    set(values, callback) { Object.assign(storage, values); callback(); }
+    set(values, callback) { Object.assign(storage, values); callback(); },
+    remove(keys, callback) {
+      for (const key of Array.isArray(keys) ? keys : [keys]) delete storage[key];
+      callback();
+    }
   } } };
   dom.window.eval(fs.readFileSync(path.join(__dirname, "../options/options.js"), "utf8"));
   await Promise.resolve();

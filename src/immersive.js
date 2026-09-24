@@ -234,6 +234,7 @@
   const MAX_TEXT_LENGTH = 4000;
   const BATCH_SIZE = 8;
   const FIRST_BATCH_SIZE = 4;
+  const VISIBLE_BATCH_CHAR_LIMIT = 1800;
   const MAX_CONCURRENT_BATCHES = 3;
   const BATCH_CHAR_LIMIT = 7000;
   // Three 60s provider attempts plus up to 45s of retry backoff and persistence.
@@ -660,6 +661,9 @@
           .map((item) => [String(item.id), Core.normalizeSubtitleText(item.translatedText)]));
         const missing = [];
         for (const block of batch) {
+          // Cache progress may have rendered this block before the original
+          // response arrives. Never count it twice or mark it missing again.
+          if (block.container.dataset.ytbtState === "done") continue;
           const translatedText = translatedById.get(block.id);
           if (translatedText) {
             renderTranslation(block, translatedText);
@@ -684,11 +688,21 @@
           await waitForVisiblePage(token, pageUrl);
           if (!isCurrentRun(token, pageUrl) || failure || !pending.length) return;
           // Re-evaluate when a slot opens: scrolling changes what matters next.
-          pending.sort((left, right) => viewportDistance(left) - viewportDistance(right));
-          const batch = takeNextBatch(pending, firstBatch ? FIRST_BATCH_SIZE : BATCH_SIZE);
+          // Read layout once per block, not repeatedly inside the sort.
+          const distances = new Map(pending.map((block) => [block, viewportDistance(block)]));
+          pending.sort((left, right) => distances.get(left) - distances.get(right));
+          const visibleCount = pending.filter((block) => distances.get(block) === 0).length;
+          const smallBatch = firstBatch || visibleCount > 0;
+          // Visible text must not wait for unrelated offscreen paragraphs in
+          // the same model response. Keep all visible batches small, including
+          // those scheduled after scrolling; larger background batches retain
+          // throughput without increasing the concurrency limit.
+          const batch = takeNextBatch(pending,
+            visibleCount ? Math.min(FIRST_BATCH_SIZE, visibleCount) : smallBatch ? FIRST_BATCH_SIZE : BATCH_SIZE,
+            smallBatch ? VISIBLE_BATCH_CHAR_LIMIT : BATCH_CHAR_LIMIT);
           firstBatch = false;
           try {
-            const items = await translateBatch(batch, false, pageUrl);
+            const items = await translateBatch(batch, false, pageUrl, (items) => applyItems(batch, items));
             if (!isCurrentRun(token, pageUrl)) return;
             const missing = applyItems(batch, items);
             if (missing.length) throw new Error("Translation missing for some blocks. Click to retry.");
@@ -1148,20 +1162,21 @@
     return 0;
   }
 
-  function takeNextBatch(pending, maxSize) {
+  function takeNextBatch(pending, maxSize, charLimit) {
     const batch = [];
     let currentChars = 0;
     while (pending.length && batch.length < maxSize) {
       const block = pending[0];
       const textLength = (block.formattedText || block.sourceText).length;
-      if (batch.length && currentChars + textLength > BATCH_CHAR_LIMIT) break;
+      // A single long paragraph stays intact to preserve context/formatting.
+      if (batch.length && currentChars + textLength > charLimit) break;
       batch.push(pending.shift());
       currentChars += textLength;
     }
     return batch;
   }
 
-  async function translateBatch(batch, cacheOnly = false, pageUrl = state.pageUrl) {
+  async function translateBatch(batch, cacheOnly = false, pageUrl = state.pageUrl, onProgress) {
     if (!batch.length) return [];
     const message = {
       type: "IMMERSIVE_TRANSLATE",
@@ -1173,7 +1188,7 @@
         formattedText: block.formattedText
       }))
     };
-    const response = cacheOnly ? await sendMessage(message) : await sendWithCacheProgress(message);
+    const response = cacheOnly ? await sendMessage(message) : await sendWithCacheProgress(message, onProgress);
 
     if (!response || response.ok === false) {
       const error = response && response.errors && response.errors[0];
@@ -1183,7 +1198,7 @@
     return Array.isArray(response.items) ? response.items : [];
   }
 
-  function sendWithCacheProgress(message) {
+  function sendWithCacheProgress(message, onProgress) {
     const token = state.runToken;
     return new Promise((resolve, reject) => {
       let settled = false;
@@ -1204,9 +1219,13 @@
           // activity while it waits on a slow provider. Never replay paid work.
           const response = await sendMessage({ ...message, cacheOnly: true });
           if (!current()) return;
-          const completed = new Set((response && response.items || [])
-            .filter((item) => item && item.translatedText).map((item) => String(item.id)));
-          if (response && response.ok !== false && message.items.every((item) => completed.has(String(item.id)))) {
+          if (!response || response.ok === false || !Array.isArray(response.items)) return;
+          const items = response.items.filter((item) => item && item.translatedText);
+          // Fallback providers can persist individual paragraphs while other
+          // paragraphs are still running. Show that progress on every probe.
+          if (items.length && onProgress) onProgress(items);
+          const completed = new Set(items.map((item) => String(item.id)));
+          if (message.items.every((item) => completed.has(String(item.id)))) {
             finish(null, response);
           }
         } catch (_) {

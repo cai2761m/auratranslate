@@ -304,6 +304,7 @@ test("page scheduler prioritizes viewport, reorders after scrolling and renders 
       gates[1].release();
       await waitUntil(() => gates.length === 4);
       assert.equal(gates[3].message.items[0].id, "im39", "newly visible paragraph goes next");
+      assert.equal(gates[3].message.items.length, 1, "scrolling keeps visible text separate from offscreen work");
       assert.equal(window.document.querySelector(`[data-ytbt-immersive-for='${firstId}']`).dataset.ytbtState, "loading");
       assert.equal(window.document.querySelector(`[data-ytbt-immersive-for='${secondId}']`).dataset.ytbtState, "done");
       gates[0].release();
@@ -340,6 +341,83 @@ test("cached paragraphs appear before paid responses and are never scheduled aga
   assert.equal(document.querySelectorAll("[data-ytbt-immersive-translation][data-ytbt-state='done']").length, 6);
 });
 
+test("visible short text never waits in a batch with offscreen long paragraphs", async (t) => {
+  const longText = "This long paragraph is outside the current viewport. ".repeat(45);
+  const { requests } = await translatePage(t, `<main><p data-index="0">Read this visible introduction first.</p>${
+    Array.from({ length: 7 }, (_, index) => `<p data-index="${index + 1}">${longText}</p>`).join("")}</main>`, {
+    rect(element) {
+      const top = Number(element.dataset.index) > 0 ? 1500 : 10;
+      return { top, bottom: top + 30 };
+    }
+  });
+  const paid = requests.filter((request) => !request.cacheOnly);
+  assert.deepEqual(Array.from(paid[0].items, (item) => item.id), ["im0"]);
+  assert.equal(paid.flatMap((request) => Array.from(request.items)).length, 8);
+  assert.ok(paid.slice(1).some((request) => request.items.length > 1), "offscreen work still uses larger batches");
+});
+
+test("all visible batches bound generation work including inline formatting", async (t) => {
+  const text = "Translate this readable paragraph with its formatting intact. ".repeat(11);
+  const { requests } = await translatePage(t, `<main>${Array.from({ length: 12 }, (_, index) =>
+    `<p>${index}: <em>${text}</em> <code>readAsString()</code></p>`).join("")}</main>`);
+  const paid = requests.filter((request) => !request.cacheOnly);
+  assert.ok(paid.length > 3, "visible text should not fill three large generation requests");
+  for (const request of paid) {
+    assert.ok(request.items.length <= 4);
+    assert.ok(request.items.reduce((total, item) => total + item.formattedText.length, 0) <= 1800);
+  }
+  assert.equal(new Set(paid.flatMap((request) => Array.from(request.items, (item) => item.id))).size, 12);
+});
+
+test("partial cache progress renders before the batch finishes and counts each block once", async (t) => {
+  let clock;
+  let release;
+  let partial = false;
+  const { document, requests } = await translatePage(t, paragraphs(4), {
+    setup(window) { clock = cachePollClock(window); },
+    sendMessage(message) {
+      if (message.cacheOnly) return partial ? translatedResponse({ items: message.items.slice(0, 1) }) : { ok: true, items: [] };
+      return new Promise((resolve) => { release = () => resolve(translatedResponse({ items: message.items.slice(1) })); });
+    },
+    async afterStart({ window }) {
+      await waitUntil(() => release);
+      partial = true;
+      await clock.tick();
+      assert.equal(window.document.querySelectorAll("[data-ytbt-immersive-translation][data-ytbt-state='done']").length, 1);
+      assert.equal(window.document.querySelector(".ytbt-immersive-tab").dataset.ytbtState, "translating");
+      await clock.tick();
+      assert.match(window.document.querySelector(".ytbt-immersive-panel").textContent, /Translating 1\/4 blocks/);
+      release();
+    }
+  });
+  assert.match(document.querySelector(".ytbt-immersive-panel").textContent, /Done\. Added 4 bilingual translations/);
+  assert.equal(requests.filter((request) => !request.cacheOnly).length, 1);
+  assert.equal(clock.timers.size, 0);
+});
+
+test("a late batch failure preserves paragraphs already rendered from cache progress", async (t) => {
+  let clock;
+  let fail;
+  let partial = false;
+  const { document, requests } = await translatePage(t, paragraphs(4), {
+    expectedState: "error",
+    setup(window) { clock = cachePollClock(window); },
+    sendMessage(message) {
+      if (message.cacheOnly) return partial ? translatedResponse({ items: message.items.slice(0, 1) }) : { ok: true, items: [] };
+      return new Promise((_, reject) => { fail = () => reject(new Error("Provider unavailable")); });
+    },
+    async afterStart() {
+      await waitUntil(() => fail);
+      partial = true;
+      await clock.tick();
+      fail();
+    }
+  });
+  assert.equal(document.querySelector("[data-ytbt-immersive-for='im0']").dataset.ytbtState, "done");
+  assert.equal(document.querySelectorAll("[data-ytbt-immersive-translation][data-ytbt-state='error']").length, 3);
+  assert.equal(requests.filter((request) => !request.cacheOnly).length, 1);
+});
+
 test("full cache hit and cache-read failure never issue paid page messages", async (t) => {
   const hit = await translatePage(t, paragraphs(8), { sendMessage: (message) => translatedResponse(message) });
   assert.equal(hit.requests.length, 1);
@@ -373,14 +451,14 @@ test("a failed concurrent batch stops new work while late successes survive and 
       }
       await waitUntil(() => window.document.querySelector(".ytbt-immersive-tab").dataset.ytbtState === "error");
       assert.equal(gates.length, 3, "unsent work must stop after failure");
-      assert.equal(window.document.querySelectorAll("[data-ytbt-immersive-translation][data-ytbt-state='done']").length, 16);
+      assert.equal(window.document.querySelectorAll("[data-ytbt-immersive-translation][data-ytbt-state='done']").length, cached.size);
       assert.equal(window.document.querySelectorAll("[data-ytbt-immersive-translation][data-ytbt-state='loading']").length, 0);
       retrying = true;
       const beforeRetry = requests.length;
       window.document.querySelector(".ytbt-immersive-tab").click();
       await waitUntil(() => window.document.querySelector(".ytbt-immersive-tab").dataset.ytbtState === "done");
       const resent = requests.slice(beforeRetry).filter((request) => !request.cacheOnly).flatMap((request) => Array.from(request.items));
-      assert.equal(resent.length, 16);
+      assert.equal(resent.length, 32 - cached.size);
       assert.ok(resent.every((item) => !cached.has(item.id)));
     }
   });
@@ -426,16 +504,16 @@ test("returning to a tab restores late cached results but never resends uncertai
       await waitUntil(() => requests.filter((message) => message.cacheOnly).length === 2);
       await new Promise((resolve) => setImmediate(resolve));
       assert.equal(window.document.querySelectorAll("[data-ytbt-state='error']").length, 1, "only the control shows an error, not every paragraph");
-      assert.equal(window.document.querySelectorAll("[data-ytbt-state='paused'][hidden]").length, 12);
+      assert.equal(window.document.querySelectorAll("[data-ytbt-state='paused'][hidden]").length, 32 - sent.size);
       const paidBefore = requests.filter((message) => !message.cacheOnly).length;
       ready = true;
       window.document.dispatchEvent(new window.Event("visibilitychange"));
       window.dispatchEvent(new window.Event("pageshow"));
-      await waitUntil(() => window.document.querySelectorAll("[data-ytbt-immersive-translation][data-ytbt-state='done']").length === 20);
+      await waitUntil(() => window.document.querySelectorAll("[data-ytbt-immersive-translation][data-ytbt-state='done']").length === sent.size);
       assert.equal(requests.filter((message) => !message.cacheOnly).length, paidBefore);
     }
   });
-  assert.equal(document.querySelectorAll("[data-ytbt-immersive-translation][data-ytbt-state='done']").length, 20);
+  assert.equal(document.querySelectorAll("[data-ytbt-immersive-translation][data-ytbt-state='done']").length, sent.size);
   assert.equal(requests.filter((message) => !message.cacheOnly).length, 3);
 });
 
@@ -454,8 +532,9 @@ test("hidden tabs pause unsent batches and continue once visible without duplica
       Object.defineProperty(window.document, "hidden", { get: () => hidden });
       window.document.dispatchEvent(new window.Event("visibilitychange"));
       hold = false;
+      const sentCount = requests.filter((message) => !message.cacheOnly).reduce((total, message) => total + message.items.length, 0);
       gates.forEach((release) => release());
-      await waitUntil(() => window.document.querySelectorAll("[data-ytbt-immersive-translation][data-ytbt-state='done']").length === 20);
+      await waitUntil(() => window.document.querySelectorAll("[data-ytbt-immersive-translation][data-ytbt-state='done']").length === sentCount);
       await new Promise((resolve) => setImmediate(resolve));
       assert.equal(requests.filter((message) => !message.cacheOnly).length, 3);
       hidden = false;

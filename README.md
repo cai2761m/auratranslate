@@ -92,6 +92,8 @@ On smaller screens, try `0.50×–0.65×` and save. Font-size changes do not req
 
 Successful subtitle translations, prepared caption windows, and webpage translations are stored in `chrome.storage.local`.
 
+- Visible webpage text uses small batches (up to 4 blocks and a target of 1,800 source characters, including formatting markers), separate from offscreen text. A longer individual paragraph stays intact. Offscreen batches remain larger, with at most three concurrent page requests; scrolling reprioritizes the next available slot. Smaller visible batches can add per-request prompt overhead.
+- Cache checks display completed paragraphs even while the rest of their batch is still translating, including results from Google fallback.
 - Refreshing a page reuses matching saved results and requests missing text. Fully cached content does not need another translation request.
 - Changing the model, endpoint, language, or relevant subtitle processing settings can require new translations. Switching subtitle scope or lookahead preserves cached progress.
 - Seeking or disabling subtitles adjusts work that has not yet been sent. Already-sent requests may finish and incur charges.
