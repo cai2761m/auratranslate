@@ -354,6 +354,46 @@ button.service-entry[aria-current="true"] {
   font-size: 13px;
   overflow-wrap: anywhere;
 }
+
+.service-detail #detail-connection[hidden] {
+  display: none;
+}
+
+.service-detail #detail-add-model[hidden] {
+  display: none;
+}
+
+.service-detail .model-catalog-heading .inline-actions {
+  margin-top: 0;
+}
+
+.detail-model-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border-bottom: 1px solid #edf2f7;
+}
+
+.detail-model-row:last-child {
+  border-bottom: 0;
+}
+
+.detail-model-row input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 9px 10px;
+  font: inherit;
+}
+
+.detail-model-row input:focus {
+  border-color: #2563eb;
+  outline: 3px solid rgba(37, 99, 235, 0.14);
+}
 .service-model + .service-model {
   border-top: 1px solid #edf2f7;
 }
@@ -669,6 +709,19 @@ button.secondary:hover {
 
   .model-row {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  }
+
+  .detail-model-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .detail-model-display-name {
+    grid-column: 1;
+  }
+
+  .detail-model-row .icon-button {
+    grid-column: 2;
+    grid-row: 1 / span 2;
   }
 
   .cache-settings {

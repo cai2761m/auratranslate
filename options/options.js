@@ -35,6 +35,7 @@
   const detailBaseUrl = document.querySelector("#detail-base-url");
   const detailFetchModels = document.querySelector("#detail-fetch-models");
   const BUILTIN_FREE = "builtin:google-free";
+  const BUILTIN_BING = "builtin:bing-free";
   const BUILTIN_CLOUD = "builtin:google-cloud";
   const dialog = document.querySelector("#service-dialog");
   const dialogTitle = document.querySelector("#service-dialog-title");
@@ -265,7 +266,7 @@
       return;
     }
 
-    if (!serviceById(editor.selectedServiceId) && ![BUILTIN_FREE, BUILTIN_CLOUD].includes(editor.selectedServiceId)) {
+    if (!serviceById(editor.selectedServiceId) && ![BUILTIN_FREE, BUILTIN_BING, BUILTIN_CLOUD].includes(editor.selectedServiceId)) {
       editor.selectedServiceId = editor.translationServiceId || BUILTIN_FREE;
     }
     const scroll = document.querySelector(".services-scroll");
@@ -284,6 +285,7 @@
     }
     const fallback = immersiveFallbackProvider.value;
     priorityServiceList.appendChild(buildServiceEntry(BUILTIN_FREE, "谷歌翻译", fallback === "google-free" ? "兜底 · 已启用" : "兜底 · 免 Key"));
+    priorityServiceList.appendChild(buildServiceEntry(BUILTIN_BING, "Bing 翻译", fallback === "bing-free" ? "兜底 · 已启用" : "兜底 · 免 Key"));
     priorityServiceList.appendChild(buildServiceEntry(BUILTIN_CLOUD, "Google Cloud Translation", fallback === "google-cloud" ? "兜底 · 已启用" : "兜底 · 官方 API"));
     if (serviceEmpty) {
       serviceEmpty.hidden = otherCount > 0;
@@ -314,23 +316,27 @@
 
   function renderServiceDetail() {
     const service = serviceById(editor.selectedServiceId);
+    const bing = editor.selectedServiceId === BUILTIN_BING;
     const cloud = editor.selectedServiceId === BUILTIN_CLOUD;
     if (detail.dataset.serviceId !== editor.selectedServiceId) detail.scrollTop = 0;
     detail.dataset.serviceId = editor.selectedServiceId;
-    document.querySelector("#detail-name").textContent = service ? service.name || "未命名供应方" : cloud ? "Google Cloud Translation" : "谷歌翻译";
+    document.querySelector("#detail-name").textContent = service ? service.name || "未命名供应方" : cloud ? "Google Cloud Translation" : bing ? "Bing 翻译" : "谷歌翻译";
     document.querySelector("#detail-kind").textContent = service ? "自定义供应方" : "内置兜底服务";
     document.querySelector("#detail-actions").hidden = !service;
+    document.querySelector("#detail-connection").hidden = !service;
     document.querySelector("#detail-description").textContent = service
       ? "在此修改密钥和 API 地址；点击编辑维护名称与模型目录。"
-      : "用于网页翻译兜底，在“沉浸式翻译”页选择启用。" + (cloud ? "使用独立的 Cloud Translation API Key，请求可能产生费用。" : "免 Key 接口可能限流、不可访问或失效。");
-    detailApiKey.value = service ? service.apiKey : cloud ? immersiveGoogleApiKey.value : "";
-    detailApiKey.disabled = !service && !cloud;
-    detailApiKey.placeholder = service || cloud ? "填写 API Key" : "无需 API Key";
-    detailBaseUrl.value = service ? service.baseUrl : cloud ? "https://translation.googleapis.com/language/translate/v2" : "https://translate.googleapis.com/translate_a/single";
-    detailBaseUrl.readOnly = !service;
-    document.querySelector("#detail-protocol").value = service ? service.apiProtocol : cloud ? "Google Cloud Translation v2" : "Google Translate";
+      : cloud
+        ? "用于网页翻译兜底，在“沉浸式翻译”页选择启用。使用 Google Cloud 官方 API Key，请求可能产生费用。"
+        : bing
+          ? "使用 Bing 网页翻译免 Key 接口作为网页翻译兜底。接口非官方，可能限流或失效。"
+          : "使用 Google 网页翻译免 Key 接口作为网页翻译兜底。接口非官方，可能限流或失效。";
+    detailApiKey.value = service ? service.apiKey : "";
+    detailBaseUrl.value = service ? service.baseUrl : "";
+    document.querySelector("#detail-protocol").value = service ? service.apiProtocol : "";
     detailFetchModels.hidden = !service;
     detailFetchModels.disabled = !!editor.detailRequest;
+    document.querySelector("#detail-add-model").hidden = !service;
     renderDetailModels(service);
     document.querySelector("#detail-model-status").textContent = "";
   }
@@ -341,31 +347,98 @@
     document.querySelector("#detail-model-count").textContent = service ? `(${service.models.length})` : "";
     for (const model of service?.models || []) {
       const item = document.createElement("li");
-      item.className = "service-model";
-      const id = document.createElement("span");
-      id.textContent = model.id;
-      const name = document.createElement("span");
-      name.textContent = model.displayName || "—";
-      item.append(id, name);
+      item.className = "detail-model-row";
+      const id = document.createElement("input");
+      id.type = "text";
+      id.className = "detail-model-id";
+      id.value = model.id;
+      id.placeholder = "模型 id，例如 gpt-6-astra";
+      id.setAttribute("aria-label", "模型 id");
+      const name = document.createElement("input");
+      name.type = "text";
+      name.className = "detail-model-display-name";
+      name.value = model.displayName;
+      name.placeholder = "显示名称（可选）";
+      name.setAttribute("aria-label", "模型显示名称");
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "icon-button";
+      remove.dataset.action = "remove-detail-model";
+      remove.textContent = "×";
+      remove.setAttribute("aria-label", `删除模型 ${model.id || ""}`);
+      item.append(id, name, remove);
       list.appendChild(item);
     }
     if (!list.children.length) {
       const empty = document.createElement("li");
       empty.className = "model-empty";
-      empty.textContent = service ? "暂无模型，获取模型列表或点击编辑手动添加。" : "此服务无需选择模型。";
+      empty.textContent = service ? "暂无模型，可添加模型或获取模型列表。" : "此服务无需选择模型。";
       list.appendChild(empty);
     }
+  }
+
+  function addDetailModel() {
+    const service = serviceById(editor.selectedServiceId);
+    if (!service) return;
+    service.models.push({ id: "", displayName: "" });
+    renderDetailModels(service);
+    renderServiceOptions();
+    renderServiceList();
+    document.querySelector("#detail-models .detail-model-row:last-child .detail-model-id")?.focus();
+    saveSettings();
+  }
+
+  function updateDetailModel(event) {
+    const service = serviceById(editor.selectedServiceId);
+    const input = closest(event.target, ".detail-model-id, .detail-model-display-name");
+    if (!service || !input) return;
+    const row = closest(input, ".detail-model-row");
+    const index = Array.prototype.indexOf.call(row.parentElement.children, row);
+    const model = service.models[index];
+    if (!model) return;
+    const oldId = model.id;
+    if (input.classList.contains("detail-model-id")) {
+      model.id = input.value.trim();
+      row.querySelector('[data-action="remove-detail-model"]')
+        .setAttribute("aria-label", `删除模型 ${model.id || ""}`);
+      if (oldId !== model.id) {
+        if (editor.translationModelId === oldId) editor.translationModelId = "";
+        if (editor.immersiveTranslationModelId === oldId) editor.immersiveTranslationModelId = "";
+        renderServiceOptions();
+        const entry = queryAll("[data-select-service]").find((button) => button.dataset.selectService === service.id);
+        if (entry) entry.querySelector(".service-entry-hint").textContent =
+          `${service.id === editor.translationServiceId ? "默认 · " : ""}${service.id === editor.immersiveTranslationServiceId ? "网页默认 · " : ""}${service.models.length} 个模型`;
+      }
+    } else {
+      model.displayName = input.value.trim();
+    }
+  }
+
+  function removeDetailModel(button) {
+    const service = serviceById(editor.selectedServiceId);
+    const row = closest(button, ".detail-model-row");
+    if (!service || !row) return;
+    const index = Array.prototype.indexOf.call(row.parentElement.children, row);
+    const [removed] = service.models.splice(index, 1);
+    if (removed?.id === editor.translationModelId) editor.translationModelId = "";
+    if (removed?.id === editor.immersiveTranslationModelId) editor.immersiveTranslationModelId = "";
+    renderServiceOptions();
+    renderServiceList();
+    saveSettings();
   }
 
   function renderServiceOptions() {
     if (translationServiceSelect) {
       const options = editor.services.length
-        ? editor.services.map((service) => ({ value: service.id, label: service.name || "未命名供应方" }))
+        ? [
+          { value: "", label: "选择默认服务" },
+          ...editor.services.map((service) => ({ value: service.id, label: service.name || "未命名供应方" }))
+        ]
         : [{ value: "", label: "尚未添加翻译服务" }];
       fillOptions(translationServiceSelect, options);
       translationServiceSelect.disabled = !editor.services.length;
       const stored = serviceById(editor.translationServiceId);
-      translationServiceSelect.value = stored ? stored.id : (editor.services[0] ? editor.services[0].id : "");
+      translationServiceSelect.value = stored ? stored.id : "";
       editor.translationServiceId = translationServiceSelect.value;
     }
 
@@ -381,7 +454,7 @@
     }
 
     if (realtimeServiceHint) {
-      realtimeServiceHint.hidden = editor.services.length > 0;
+      realtimeServiceHint.hidden = Boolean(editor.translationServiceId);
     }
 
     renderModelOptions();
@@ -587,10 +660,6 @@
     } else {
       editor.services.push(draft);
     }
-    if (!editor.translationServiceId) {
-      editor.translationServiceId = draft.id;
-    }
-
     editor.selectedServiceId = draft.id;
     renderServiceOptions();
     renderServiceList();
@@ -606,7 +675,7 @@
 
     editor.services.splice(index, 1);
     if (editor.translationServiceId === serviceId) {
-      editor.translationServiceId = editor.services.length ? editor.services[0].id : "";
+      editor.translationServiceId = "";
       editor.translationModelId = "";
     }
     if (editor.immersiveTranslationServiceId === serviceId) {
@@ -779,6 +848,12 @@
         renderServiceList();
       });
     }
+    document.querySelector("#detail-add-model")?.addEventListener("click", addDetailModel);
+    document.querySelector("#detail-models")?.addEventListener("input", updateDetailModel);
+    document.querySelector("#detail-models")?.addEventListener("click", (event) => {
+      const button = closest(event.target, '[data-action="remove-detail-model"]');
+      if (button) removeDetailModel(button);
+    });
     document.querySelector("#edit-service")?.addEventListener("click", () => openServiceDialog(editor.selectedServiceId));
     document.querySelector("#delete-service")?.addEventListener("click", () => deleteService(editor.selectedServiceId));
     detailApiKey?.addEventListener("input", () => {

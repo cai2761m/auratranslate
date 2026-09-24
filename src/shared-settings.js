@@ -362,7 +362,7 @@
     }
 
     const translationServiceId =
-      findServiceById(services, source.translationServiceId) ? String(source.translationServiceId).trim() : services[0].id;
+      findServiceById(services, source.translationServiceId) ? String(source.translationServiceId).trim() : "";
     const immersiveTranslationServiceId = findServiceById(services, source.immersiveTranslationServiceId)
       ? String(source.immersiveTranslationServiceId).trim()
       : "";
@@ -370,7 +370,9 @@
       services,
       migrated: false,
       translationServiceId,
-      translationModelId: pickModelId(findServiceById(services, translationServiceId), source.translationModelId),
+      translationModelId: translationServiceId
+        ? pickModelId(findServiceById(services, translationServiceId), source.translationModelId)
+        : "",
       immersiveTranslationServiceId,
       immersiveTranslationModelId: pickModelId(
         findServiceById(services, immersiveTranslationServiceId),

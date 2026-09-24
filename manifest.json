@@ -44,6 +44,7 @@
       "src/background-immersive.js",
       "src/background-google.js",
       "src/background-requests.js",
+      "src/background-bing.js",
       "src/background-cache.js",
       "src/background.js"
     ]

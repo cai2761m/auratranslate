@@ -8,8 +8,8 @@ async function handleImmersiveTranslate(message) {
   const sourceLanguage = preferences.immersiveSourceLanguage || "auto";
   const service = preferences.immersiveTranslationService || "ai";
   const translationConfig = Core.resolveTranslationConfig(settings, "immersive");
-  if (["google-free", "google-cloud"].includes(service)) {
-    // A selected Google service is the primary provider, even with AI configured.
+  if (["google-free", "google-cloud", "bing-free"].includes(service)) {
+    // A selected built-in service is primary, even when an AI service is configured.
     settings.immersiveFallbackProvider = service;
     Object.assign(translationConfig, { provider: service, apiKey: "", model: "", chatCompletionsUrl: "", generateContentUrl: "" });
   }
@@ -72,7 +72,7 @@ async function handleImmersiveTranslate(message) {
   }
 
   if (message.cacheOnly !== true && missing.length) {
-    const fallbackProvider = ["google-free", "google-cloud"].includes(settings.immersiveFallbackProvider)
+    const fallbackProvider = ["google-free", "google-cloud", "bing-free"].includes(settings.immersiveFallbackProvider)
       ? settings.immersiveFallbackProvider : "off";
     if (fallbackProvider === "off" && (!translationConfig.apiKey || !endpointUrl || !translationConfig.model)) {
       throw new Error(`${translationConfig.providerLabel} ${!translationConfig.apiKey ? "API Key" : "base URL or model"} is not configured.`);
@@ -91,7 +91,8 @@ async function handleImmersiveTranslate(message) {
           if (cue && item.translatedText) {
             newItems[cue.id] = { sourceText: cue.sourceText, translatedText: item.translatedText,
               translationProvider: item.translationProvider || translationConfig.provider,
-              googleTranslationVersion: item.googleTranslationVersion };
+              googleTranslationVersion: item.googleTranslationVersion,
+              bingTranslationVersion: item.bingTranslationVersion };
           }
         }
         const maxItems = Number(settings.translationCacheMaxItems) || Core.DEFAULT_CACHE_MAX_ITEMS;
@@ -123,9 +124,12 @@ async function immersiveFingerprint(value) {
 
 function usableImmersiveCache(entry, sourceText, hasFormatting) {
   if (!entry || entry.sourceText !== sourceText || typeof entry.translatedText !== "string" || !entry.translatedText.trim()) return false;
-  // Only obsolete Google formatting results need replacing. Preserve AI and
+  // Only obsolete free-translation formatting results need replacing. Preserve AI and
   // plain-text caches, and never initiate a request during cache-only probes.
-  return !hasFormatting || !["google-free", "google-cloud"].includes(entry.translationProvider) || entry.googleTranslationVersion === 2;
+  if (!hasFormatting) return true;
+  if (["google-free", "google-cloud"].includes(entry.translationProvider)) return entry.googleTranslationVersion === 2;
+  if (entry.translationProvider === "bing-free") return entry.bingTranslationVersion === 1;
+  return true;
 }
 
 // Fallback is opt-in and belongs inside in-flight deduplication. Storage errors
@@ -156,11 +160,14 @@ async function translateImmersiveWithFallback(request, settings, retain) {
       // Earlier successes are already cached. Return them so the page can render
       // partial progress; a subsequent click only requests missing paragraphs.
       if (items.length) return items;
-      const failure = new Error(`${primaryError ? `主接口失败：${primaryError.message}；` : ""}Google 兜底失败：${error.message}`);
+      const providerLabel = settings.immersiveFallbackProvider === "bing-free" ? "Bing" : "Google";
+      const failure = new Error(`${primaryError ? `主接口失败：${primaryError.message}；` : ""}${providerLabel} 兜底失败：${error.message}`);
       failure.requestMayHaveReachedProvider = Boolean(primaryError?.requestMayHaveReachedProvider || error.requestMayHaveReachedProvider);
       throw failure;
     }
-    const item = { id: cue.id, translatedText, translationProvider: settings.immersiveFallbackProvider, googleTranslationVersion: 2 };
+    const bing = settings.immersiveFallbackProvider === "bing-free";
+    const item = { id: cue.id, translatedText, translationProvider: settings.immersiveFallbackProvider,
+      ...(bing ? { bingTranslationVersion: 1 } : { googleTranslationVersion: 2 }) };
     await retain([item]);
     items.push(item);
   }

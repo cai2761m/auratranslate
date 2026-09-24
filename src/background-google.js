@@ -1,7 +1,7 @@
-// Google paragraph translation, formatting validation, and rate limits.
+// Google translation plus shared paragraph chunking, formatting checks, and request limits.
 // Classic scripts share the dedicated background scope; background.js loads them
 // synchronously in Chrome, and manifest.json supplies the same order in Firefox.
-function googleParagraphChunks(text, hasFormatting) {
+function googleParagraphChunks(text, hasFormatting, maxLength = 4000) {
   const tokens = hasFormatting ? text.split(/(\[\[\/?YTBT_[A-Z]+_\d+\]\])/g) : [text];
   const units = [];
   let depth = 0;
@@ -22,7 +22,7 @@ function googleParagraphChunks(text, hasFormatting) {
     let count = 0;
     let sentenceEnd = start;
     let wordEnd = start;
-    while (end < units.length && count + Array.from(units[end]).length <= 4000) {
+    while (end < units.length && count + Array.from(units[end]).length <= maxLength) {
       count += Array.from(units[end]).length;
       if (/^\s$/.test(units[end])) {
         wordEnd = end + 1;
@@ -87,6 +87,9 @@ async function withGoogleSlot(work) {
 }
 
 async function translateGoogleCue(text, request, settings, deadline, hasFormatting = false) {
+  if (settings.immersiveFallbackProvider === "bing-free") {
+    return translateBingCue(text, request, deadline, hasFormatting);
+  }
   const cloud = settings.immersiveFallbackProvider === "google-cloud";
   const apiKey = String(settings.immersiveGoogleApiKey || "").trim();
   if (cloud && !apiKey) throw new Error("请填写 Google Cloud Translation API Key。");

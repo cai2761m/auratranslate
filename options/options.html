@@ -75,10 +75,12 @@
                     </div>
                   </div>
                   <p class="detail-description" id="detail-description"></p>
-                  <label class="field"><span>API Key</span><input id="detail-api-key" type="password" autocomplete="off"></label>
-                  <label class="field"><span>API 地址</span><input id="detail-base-url" type="url" autocomplete="off" placeholder="https://api.example.com/v1"></label>
-                  <label class="field"><span>API 协议</span><input id="detail-protocol" type="text" readonly></label>
-                  <div class="model-catalog-heading"><h4>模型列表 <span id="detail-model-count"></span></h4><button type="button" id="detail-fetch-models" class="ghost">获取模型列表</button></div>
+                  <div id="detail-connection">
+                    <label class="field"><span>API Key</span><input id="detail-api-key" type="password" autocomplete="off"></label>
+                    <label class="field"><span>API 地址</span><input id="detail-base-url" type="url" autocomplete="off" placeholder="https://api.example.com/v1"></label>
+                    <label class="field"><span>API 协议</span><input id="detail-protocol" type="text" readonly></label>
+                  </div>
+                  <div class="model-catalog-heading"><h4>模型列表 <span id="detail-model-count"></span></h4><div class="inline-actions"><button type="button" id="detail-add-model" class="ghost">添加模型</button><button type="button" id="detail-fetch-models" class="ghost">获取模型列表</button></div></div>
                   <ul class="detail-models" id="detail-models"></ul>
                   <p class="model-status" id="detail-model-status" role="status"></p>
                 </article>
@@ -92,8 +94,8 @@
                 <p>用于 YouTube 和 Google Drive 字幕抓取、预翻译及视频上的双语字幕叠加层。</p>
               </div>
 
-              <p class="section-note" id="realtime-service-hint" hidden>还没有可用的翻译服务，请先到
-                <button type="button" class="link-button" data-goto="translation-services">翻译服务</button> 页添加供应方和模型。
+              <p class="section-note" id="realtime-service-hint" hidden>尚未选择默认翻译服务，请先到
+                <button type="button" class="link-button" data-goto="translation-services">翻译服务</button> 页添加并选择服务和模型。
               </p>
 
               <label class="field">
@@ -141,13 +143,14 @@
               </label>
 
               <label class="field">
-                <span>Google 翻译兜底</span>
+                <span>网页翻译兜底服务</span>
                 <select id="immersiveFallbackProvider">
                   <option value="off">关闭（默认）</option>
                   <option value="google-free">Google 翻译（免 Key，可能限流）</option>
+                  <option value="bing-free">Bing 翻译（免 Key，可能限流）</option>
                   <option value="google-cloud">Google Cloud Translation（官方 API）</option>
                 </select>
-                <small>主 API 未配置、失败或漏译时，将缺失的网页文字发送给所选 Google 服务。已有缓存优先复用，不影响字幕翻译。</small>
+                <small>主 API 未配置、失败或漏译时，将缺失的网页文字发送给所选服务。已有缓存优先复用，不影响字幕翻译。</small>
               </label>
               <label class="field" hidden>
                 <span>Google Cloud Translation API Key</span>

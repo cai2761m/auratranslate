@@ -14,6 +14,7 @@ if (typeof importScripts === "function") {
     "background-immersive.js",
     "background-google.js",
     "background-requests.js",
+    "background-bing.js",
     "background-cache.js"
   );
 }
