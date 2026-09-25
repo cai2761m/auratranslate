@@ -33,8 +33,13 @@
   const detailFetchModels = document.querySelector("#detail-fetch-models");
   const detailTestModels = document.querySelector("#detail-test-models");
   const modelTestDialog = document.querySelector("#model-test-dialog");
-  const modelTestProgress = document.querySelector("#model-test-progress");
+  const startModelTest = document.querySelector("#start-model-test");
   const modelTestResults = document.querySelector("#model-test-results");
+  const modelPickerDialog = document.querySelector("#model-picker-dialog");
+  const modelPickerList = document.querySelector("#model-picker-list");
+  const modelPickerSummary = document.querySelector("#model-picker-summary");
+  const modelPickerSelectedCount = document.querySelector("#model-picker-selected-count");
+  const modelPickerAdd = document.querySelector("#model-picker-add");
   const dialog = document.querySelector("#service-dialog");
   const dialogTitle = document.querySelector("#service-dialog-title");
   const serviceName = document.querySelector("#service-name");
@@ -66,6 +71,9 @@
     detailRequest: null,
     modelTestVersion: 0,
     modelTestControllers: new Set(),
+    modelTestContext: null,
+    modelPickerContext: null,
+    modelPickerOpener: null,
     editingServiceId: "",
     opener: null,
     translationServiceId: "",
@@ -705,28 +713,17 @@
         throw new Error(`HTTP ${response.status}`);
       }
       const modelIds = extractModelIds(await response.json());
-      if (version !== editor.dialogVersion) return;
+      if (version !== editor.dialogVersion || baseUrl !== serviceBaseUrl.value.trim() || apiKey !== serviceApiKey.value.trim()) return;
       if (!modelIds.length) {
         setModelStatus("接口没有返回可用的模型，请手工填写模型 id。");
         return;
       }
-
-      const models = collectModelRows();
-      const known = new Set(models.map((model) => model.id));
-      let added = 0;
-      for (const id of modelIds) {
-        if (known.has(id)) continue;
-        models.push({ id, displayName: "" });
-        known.add(id);
-        added += 1;
-      }
-      if (serviceModels) {
-        serviceModels.textContent = "";
-        for (const model of models) {
-          appendModelRow(model);
-        }
-      }
-      setModelStatus(`接口返回 ${modelIds.length} 个模型，新增 ${added} 个。`);
+      openModelPicker(modelIds, new Set(collectModelRows().map((model) => model.id)), {
+        source: "draft",
+        dialogVersion: version,
+        serviceId: editor.editingServiceId
+      });
+      setModelStatus(`接口返回 ${modelIds.length} 个模型，请在弹窗中勾选要添加的模型。`);
     } catch (error) {
       if (version !== editor.dialogVersion) return;
       const reason = error && error.message ? error.message : "请求失败";
@@ -752,7 +749,7 @@
     detailFetchModels.disabled = true;
     message.textContent = "正在获取可用模型…";
     const isCurrent = () => serviceById(service.id) === service && editor.selectedServiceId === service.id
-      && service.baseUrl === baseUrl && service.apiKey === apiKey;
+      && service.baseUrl === baseUrl && service.apiKey === apiKey && dialog.hidden && modelTestDialog.hidden;
     try {
       const response = await fetch(Core.buildModelsUrl(baseUrl), {
         headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {}, signal: controller.signal
@@ -760,13 +757,15 @@
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const ids = extractModelIds(await response.json());
       if (!isCurrent()) return;
-      const known = new Set(service.models.map((model) => model.id));
-      const added = ids.filter((id) => !known.has(id)).map((id) => ({ id, displayName: "" }));
-      service.models.push(...added);
-      renderServiceOptions();
-      renderServiceList();
-      message.textContent = ids.length ? `接口返回 ${ids.length} 个模型，新增 ${added.length} 个。` : "接口没有返回可用模型，请点击编辑手动添加。";
-      if (added.length) saveSettings();
+      if (!ids.length) {
+        message.textContent = "接口没有返回可用模型，请点击编辑手动添加。";
+        return;
+      }
+      openModelPicker(ids, new Set(service.models.map((model) => model.id)), {
+        source: "detail",
+        serviceId: service.id
+      });
+      message.textContent = `接口返回 ${ids.length} 个模型，请在弹窗中勾选要添加的模型。`;
     } catch (error) {
       if (isCurrent()) message.textContent = `获取失败（${error.name === "AbortError" ? "请求超时" : error.message}），已保留现有模型。`;
     } finally {
@@ -776,126 +775,161 @@
     }
   }
 
-  async function testDetailModels() {
-    const service = serviceById(editor.selectedServiceId);
-    if (!service || !modelTestDialog || !modelTestResults || editor.modelTestControllers.size) return;
+  function modelTestStorageKey(context, modelId) {
+    return "modelTestResult:" + JSON.stringify([context.serviceId, context.baseUrl, modelId]);
+  }
 
-    const models = service.models.filter((model) => model.id.trim());
+  function renderModelTestResult(item, record) {
+    const result = item.querySelector(".model-test-result-status");
+    item.dataset.state = record?.state || "untested";
+    item.dataset.latency = !record ? "unknown" : record.state === "error" || record.latencyMs > 10000
+      ? "slow" : record.latencyMs > 3000 ? "medium" : "fast";
+    result.textContent = record
+      ? (record.state === "error" ? record.message + " · " : "") + record.latencyMs + " ms"
+      : "未测试";
+    result.title = record
+      ? "上次测试：" + new Date(record.testedAt).toLocaleString() + "；完整响应耗时 " + record.latencyMs + " ms"
+      : "尚无测试记录";
+  }
+
+  async function openModelTestDialog() {
+    const service = serviceById(editor.selectedServiceId);
+    if (!service || !modelTestDialog || !modelTestDialog.hidden) return;
     const version = ++editor.modelTestVersion;
-    const baseUrl = service.baseUrl.trim();
-    const apiKey = service.apiKey.trim();
-    detailTestModels.disabled = true;
+    const context = {
+      serviceId: service.id,
+      baseUrl: service.baseUrl.trim().replace(/\/+$/, ""),
+      apiKey: service.apiKey.trim(),
+      models: service.models.filter((model, index, models) => model.id.trim() && models.findIndex((entry) => entry.id === model.id) === index)
+        .map((model) => ({ ...model })),
+      running: false
+    };
+    editor.modelTestContext = context;
     modelTestDialog.hidden = false;
     form.inert = true;
     document.querySelector(".settings-sidebar").inert = true;
     modelTestResults.textContent = "";
-    document.querySelector("#close-model-test")?.focus();
-
-    for (const model of models) {
+    startModelTest.disabled = true;
+    startModelTest.textContent = "测试";
+    document.querySelector("#close-model-test").focus();
+    const defaults = {};
+    for (const model of context.models) {
       const item = document.createElement("li");
       item.className = "model-test-result";
-      item.dataset.state = "pending";
       const name = document.createElement("span");
       name.className = "model-test-result-name";
-      name.textContent = model.displayName ? `${model.displayName}（${model.id}）` : model.id;
+      name.textContent = model.displayName ? model.displayName + "（" + model.id + "）" : model.id;
+      const phase = document.createElement("span");
+      phase.className = "model-test-result-phase";
       const result = document.createElement("span");
       result.className = "model-test-result-status";
-      result.textContent = baseUrl ? "等待测试" : "缺少 API 地址";
-      item.append(name, result);
+      item.append(name, phase, result);
+      renderModelTestResult(item, null);
       modelTestResults.appendChild(item);
+      defaults[modelTestStorageKey(context, model.id)] = null;
     }
+    if (!context.models.length) {
+      const empty = document.createElement("li");
+      empty.className = "model-empty";
+      empty.textContent = "当前供应方没有可测试的模型。";
+      modelTestResults.appendChild(empty);
+    }
+    startModelTest.title = context.baseUrl ? "测试全部模型" : "请先填写 API 地址";
+    const saved = await storageGet(defaults);
+    if (version !== editor.modelTestVersion) return;
+    context.models.forEach((model, index) => {
+      const record = saved[modelTestStorageKey(context, model.id)];
+      if (!record || !["success", "error"].includes(record.state) ||
+          !Number.isFinite(record.latencyMs) || record.latencyMs < 0) return;
+      renderModelTestResult(modelTestResults.children[index], record);
+    });
+    startModelTest.disabled = !context.models.length || !context.baseUrl;
+  }
 
-    if (!models.length) {
-      modelTestProgress.textContent = "当前供应方没有可测试的模型。";
-      return;
+  async function runModelTests() {
+    const context = editor.modelTestContext;
+    if (!context || context.running || startModelTest.disabled || modelTestDialog.hidden) return;
+    const version = ++editor.modelTestVersion;
+    context.running = true;
+    startModelTest.disabled = true;
+    startModelTest.textContent = "测试中…";
+    modelTestResults.setAttribute("aria-busy", "true");
+    for (const item of modelTestResults.children) {
+      item.querySelector(".model-test-result-phase").textContent = "等待测试";
     }
-    if (!baseUrl) {
-      modelTestProgress.textContent = "请先填写 API 地址。";
-      return;
-    }
-
     let nextIndex = 0;
-    let completed = 0;
-    let passed = 0;
-    const testNextModel = async () => {
+    const worker = async () => {
       while (version === editor.modelTestVersion) {
         const index = nextIndex++;
-        if (index >= models.length) return;
-        const model = models[index];
+        if (index >= context.models.length) return;
+        const model = context.models[index];
         const item = modelTestResults.children[index];
-        const result = item.querySelector(".model-test-result-status");
-        result.textContent = "测试中…";
-
+        const phase = item.querySelector(".model-test-result-phase");
+        phase.textContent = "测试中…";
         const controller = new AbortController();
         editor.modelTestControllers.add(controller);
         const timer = setTimeout(() => controller.abort(), 20000);
+        const started = performance.now();
+        let record;
         try {
-          const response = await fetch(Core.buildChatCompletionsUrl(baseUrl), {
+          const response = await fetch(Core.buildChatCompletionsUrl(context.baseUrl), {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
+              ...(context.apiKey ? { Authorization: "Bearer " + context.apiKey } : {})
             },
-            body: JSON.stringify({
-              model: model.id,
-              messages: [{ role: "user", content: "Reply with OK." }]
-            }),
+            body: JSON.stringify({ model: model.id, messages: [{ role: "user", content: "Reply with OK." }] }),
             signal: controller.signal
           });
-          const payload = await response.json();
-          if (!response.ok) {
-            const reason = payload?.error?.message || payload?.message || `HTTP ${response.status}`;
-            throw new Error(reason);
+          if (!response.ok) throw new Error("HTTP " + response.status);
+          let payload;
+          try { payload = await response.json(); }
+          catch (error) {
+            if (controller.signal.aborted) throw error;
+            throw new Error("返回非 JSON 数据");
           }
-          if (payload?.error) throw new Error(payload.error.message || "接口返回错误");
-          if (!Array.isArray(payload?.choices) || payload.choices.length === 0) {
-            throw new Error("接口未返回有效的模型回复");
+          if (payload?.error) throw new Error("接口返回错误");
+          const content = payload?.choices?.[0]?.message?.content;
+          if (!(typeof content === "string" && content.trim()) &&
+              !(Array.isArray(content) && content.some((part) => typeof part?.text === "string" && part.text.trim()))) {
+            throw new Error("未返回有效回复");
           }
-          item.dataset.state = "success";
-          result.textContent = "正常";
-          passed += 1;
+          record = { state: "success", message: "" };
         } catch (error) {
-          if (version !== editor.modelTestVersion) return;
-          item.dataset.state = "error";
-          result.textContent = controller.signal.aborted ? "请求超时" : shortModelTestError(error);
+          record = { state: "error", message: controller.signal.aborted ? "请求超时"
+            : error instanceof TypeError ? "网络请求失败" : String(error.message || "请求失败").slice(0, 50) };
         } finally {
           clearTimeout(timer);
           editor.modelTestControllers.delete(controller);
         }
-
-        completed += 1;
-        if (version === editor.modelTestVersion) {
-          modelTestProgress.textContent = `已完成 ${completed}/${models.length} 个模型，其他请求继续测试中。`;
-        }
+        // Closing and reopening must not accept a late response from the old run.
+        if (version !== editor.modelTestVersion) return;
+        record.latencyMs = Math.max(1, Math.round(performance.now() - started));
+        record.testedAt = Date.now();
+        phase.textContent = "";
+        renderModelTestResult(item, record);
+        await storageSet({ [modelTestStorageKey(context, model.id)]: record });
       }
     };
-
-    modelTestProgress.textContent = `正在并行测试 ${models.length} 个模型（最多 ${Math.min(MODEL_TEST_CONCURRENCY, models.length)} 个同时进行）。`;
-    await Promise.all(Array.from(
-      { length: Math.min(MODEL_TEST_CONCURRENCY, models.length) },
-      () => testNextModel()
-    ));
-
-    if (version === editor.modelTestVersion) {
-      modelTestProgress.textContent = `测试完成：${passed}/${models.length} 个模型正常。`;
-      detailTestModels.disabled = false;
-    }
-  }
-
-  function shortModelTestError(error) {
-    const message = String(error?.message || "请求失败").replace(/\s+/g, " ").trim();
-    return message.length > 100 ? `${message.slice(0, 97)}…` : message;
+    await Promise.all(Array.from({ length: Math.min(MODEL_TEST_CONCURRENCY, context.models.length) }, worker));
+    if (version !== editor.modelTestVersion) return;
+    context.running = false;
+    startModelTest.disabled = false;
+    startModelTest.textContent = "测试";
+    modelTestResults.setAttribute("aria-busy", "false");
   }
 
   function closeModelTestDialog() {
     editor.modelTestVersion += 1;
     for (const controller of editor.modelTestControllers) controller.abort();
     editor.modelTestControllers.clear();
+    editor.modelTestContext = null;
     detailTestModels.disabled = false;
-    if (modelTestDialog) modelTestDialog.hidden = true;
+    modelTestDialog.hidden = true;
+    modelTestResults.setAttribute("aria-busy", "false");
     form.inert = false;
     document.querySelector(".settings-sidebar").inert = false;
-    detailTestModels?.focus();
+    detailTestModels.focus();
   }
 
   function extractModelIds(payload) {
@@ -912,6 +946,108 @@
       }
     }
     return ids;
+  }
+
+  function openModelPicker(modelIds, existingIds, context) {
+    if (!modelPickerDialog || !modelPickerList) return;
+    editor.modelPickerContext = context;
+    editor.modelPickerOpener = document.activeElement;
+    modelPickerList.textContent = "";
+    let existingCount = 0;
+    for (const id of modelIds) {
+      const exists = existingIds.has(id);
+      if (exists) existingCount += 1;
+      const item = document.createElement("li");
+      item.className = "model-picker-item";
+      const label = document.createElement("label");
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.value = id;
+      checkbox.disabled = exists;
+      const name = document.createElement("span");
+      name.className = "model-picker-item-name";
+      name.textContent = id;
+      label.append(checkbox, name);
+      item.appendChild(label);
+      if (exists) {
+        const state = document.createElement("small");
+        state.textContent = "已在目录中";
+        item.appendChild(state);
+      }
+      modelPickerList.appendChild(item);
+    }
+    modelPickerSummary.textContent = `接口返回 ${modelIds.length} 个模型，其中 ${existingCount} 个已在目录中。`;
+    updateModelPickerSelection();
+
+    form.inert = true;
+    document.querySelector(".settings-sidebar").inert = true;
+    if (!dialog.hidden) dialog.querySelector(".modal-panel").inert = true;
+    modelPickerDialog.hidden = false;
+    document.querySelector("#model-picker-select-all")?.focus();
+  }
+
+  function updateModelPickerSelection() {
+    const selected = queryAll("input[type='checkbox']:checked:not(:disabled)", modelPickerList).length;
+    modelPickerSelectedCount.textContent = `已选 ${selected} 个模型`;
+    modelPickerAdd.disabled = selected === 0;
+  }
+
+  function selectAllNewModels(checked) {
+    for (const checkbox of queryAll("input[type='checkbox']:not(:disabled)", modelPickerList)) {
+      checkbox.checked = checked;
+    }
+    updateModelPickerSelection();
+  }
+
+  function applyModelPickerSelection() {
+    const context = editor.modelPickerContext;
+    const selectedIds = queryAll("input[type='checkbox']:checked:not(:disabled)", modelPickerList)
+      .map((checkbox) => checkbox.value);
+    if (!context || !selectedIds.length) return;
+
+    if (context.source === "draft") {
+      if (context.dialogVersion !== editor.dialogVersion || context.serviceId !== editor.editingServiceId) {
+        closeModelPicker();
+        return;
+      }
+      const models = collectModelRows();
+      const known = new Set(models.map((model) => model.id));
+      const added = selectedIds.filter((id) => !known.has(id)).map((id) => ({ id, displayName: "" }));
+      for (const model of added) models.push(model);
+      serviceModels.textContent = "";
+      for (const model of models) appendModelRow(model);
+      setModelStatus(`已添加 ${added.length} 个模型。`);
+    } else if (context.source === "detail") {
+      const service = serviceById(context.serviceId);
+      if (!service || editor.selectedServiceId !== context.serviceId) {
+        closeModelPicker();
+        return;
+      }
+      const known = new Set(service.models.map((model) => model.id));
+      const added = selectedIds.filter((id) => !known.has(id)).map((id) => ({ id, displayName: "" }));
+      service.models.push(...added);
+      renderServiceOptions();
+      renderServiceList();
+      document.querySelector("#detail-model-status").textContent = `已添加 ${added.length} 个模型。`;
+      if (added.length) saveSettings();
+    }
+
+    closeModelPicker();
+  }
+
+  function closeModelPicker() {
+    if (modelPickerDialog) modelPickerDialog.hidden = true;
+    editor.modelPickerContext = null;
+    const opener = editor.modelPickerOpener;
+    editor.modelPickerOpener = null;
+    const providerDialogOpen = dialog && !dialog.hidden;
+    if (providerDialogOpen) {
+      dialog.querySelector(".modal-panel").inert = false;
+    } else {
+      form.inert = false;
+      document.querySelector(".settings-sidebar").inert = false;
+    }
+    if (opener?.isConnected) opener.focus();
   }
 
   function setModelStatus(message) {
@@ -956,7 +1092,8 @@
       });
     }
     document.querySelector("#detail-add-model")?.addEventListener("click", addDetailModel);
-    detailTestModels?.addEventListener("click", testDetailModels);
+    detailTestModels?.addEventListener("click", openModelTestDialog);
+    startModelTest?.addEventListener("click", runModelTests);
     document.querySelector("#close-model-test")?.addEventListener("click", closeModelTestDialog);
     modelTestDialog?.addEventListener("click", (event) => {
       if (closest(event.target, "[data-close='model-test']")) closeModelTestDialog();
@@ -966,8 +1103,41 @@
         event.preventDefault();
         closeModelTestDialog();
       } else if (event.key === "Tab") {
+        const fields = queryAll("button:not(:disabled)", modelTestDialog);
+        const first = fields[0];
+        const last = fields[fields.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+    });
+    modelPickerList?.addEventListener("change", updateModelPickerSelection);
+    document.querySelector("#model-picker-select-all")?.addEventListener("click", () => selectAllNewModels(true));
+    document.querySelector("#model-picker-clear")?.addEventListener("click", () => selectAllNewModels(false));
+    modelPickerAdd?.addEventListener("click", applyModelPickerSelection);
+    document.querySelector("#model-picker-cancel")?.addEventListener("click", closeModelPicker);
+    modelPickerDialog?.addEventListener("click", (event) => {
+      if (closest(event.target, "[data-close='model-picker']")) closeModelPicker();
+    });
+    modelPickerDialog?.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
         event.preventDefault();
-        document.querySelector("#close-model-test")?.focus();
+        closeModelPicker();
+      } else if (event.key === "Tab") {
+        const fields = queryAll("button:not(:disabled), input:not(:disabled)", modelPickerDialog);
+        const first = fields[0];
+        const last = fields[fields.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
       }
     });
     document.querySelector("#detail-models")?.addEventListener("input", updateDetailModel);

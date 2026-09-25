@@ -147,7 +147,7 @@ test("deleting a service clears the selections that pointed at it", async (t) =>
   assert.equal(Core.resolveTranslationConfig(storage).apiKey, "key-a");
 });
 
-test("获取可用模型 fills the catalog from the provider model endpoint", async (t) => {
+test("获取模型列表 opens a picker and only adds checked models", async (t) => {
   const storage = {};
   const page = await openSettings(t, storage);
   const requests = [];
@@ -166,15 +166,42 @@ test("获取可用模型 fills the catalog from the provider model endpoint", as
   assert.equal(requests.length, 1);
   assert.equal(requests[0].url, "https://cf.example.cc/v1/models");
   assert.equal(requests[0].options.headers.Authorization, "Bearer sk-astra");
+  assert.equal(page.field("model-picker-dialog").hidden, false);
   assert.deepEqual(
-    [...page.document.querySelectorAll(".model-id")].map((input) => input.value),
+    [...page.field("model-picker-list").querySelectorAll(".model-picker-item-name")].map((item) => item.textContent),
     ["gpt-6-astra", "gpt-5"]
   );
-  assert.match(page.field("service-models-status").textContent, /接口返回 2 个模型/);
+  assert.deepEqual([...page.document.querySelectorAll(".model-id")].map((input) => input.value), [""]);
+  const checkboxes = page.field("model-picker-list").querySelectorAll("input[type='checkbox']");
+  checkboxes[1].checked = true;
+  checkboxes[1].dispatchEvent(new page.window.Event("change", { bubbles: true }));
+  page.field("model-picker-add").click();
+  assert.deepEqual([...page.document.querySelectorAll(".model-id")].map((input) => input.value), ["gpt-5"]);
 
   page.document.getElementById("save-service").click();
-  await page.save();
-  assert.equal(Core.resolveTranslationConfig(storage).model, "gpt-6-astra");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(Array.from(storage.translationServices[0].models, (model) => model.id), ["gpt-5"]);
+});
+
+test("cancelling model selection leaves the provider draft unchanged", async (t) => {
+  const page = await openSettings(t, serviceFixture());
+  page.document.querySelector('[data-select-service="service-1"]').click();
+  page.field("edit-service").click();
+  page.field("service-base-url").value = "https://a.example/v1";
+  page.window.fetch = async () => ({ ok: true, json: async () => ({ data: [{ id: "model-a" }, { id: "model-new" }] }) });
+  page.field("fetch-models").click();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(page.field("model-picker-dialog").hidden, false);
+  const newModel = page.field("model-picker-list").querySelectorAll("input[type='checkbox']")[1];
+  newModel.checked = true;
+  newModel.dispatchEvent(new page.window.Event("change", { bubbles: true }));
+  page.field("model-picker-cancel").click();
+
+  assert.equal(page.field("model-picker-dialog").hidden, true);
+  assert.equal(page.field("service-dialog").hidden, false);
+  assert.deepEqual([...page.document.querySelectorAll(".model-id")].map((input) => input.value), ["model-a"]);
+  page.field("cancel-service").click();
 });
 
 test("a failing model request keeps the manual catalog and explains the error", async (t) => {
@@ -263,7 +290,7 @@ test("service details stay hidden until a custom provider is selected", async (t
   assert.equal(page.field("service-detail").hidden, true);
 });
 
-test("detail model fetch merges ids, preserves aliases and updates model selectors", async (t) => {
+test("detail model fetch lets the user pick models and skips existing ids", async (t) => {
   const storage = serviceFixture();
   const page = await openSettings(t, storage);
   page.document.querySelector('[data-select-service="service-1"]').click();
@@ -274,10 +301,15 @@ test("detail model fetch merges ids, preserves aliases and updates model selecto
   };
   page.field("detail-fetch-models").click();
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(page.document.querySelectorAll(".service-model").length, 2);
-  assert.match(page.field("detail-models").textContent, /别名 A/);
-  await page.save();
-  assert.equal(storage.translationServices[0].models.length, 2);
+  assert.equal(page.field("model-picker-dialog").hidden, false);
+  const choices = [...page.field("model-picker-list").querySelectorAll(".model-picker-item")];
+  assert.equal(choices.length, 2);
+  assert.equal(choices[0].querySelector("input").disabled, true);
+  assert.match(choices[0].textContent, /已在目录中/);
+  choices[1].querySelector("input").checked = true;
+  choices[1].querySelector("input").dispatchEvent(new page.window.Event("change", { bubbles: true }));
+  page.field("model-picker-add").click();
+  assert.deepEqual([...page.field("detail-models").querySelectorAll(".detail-model-id")].map((input) => input.value), ["model-a", "new-model"]);
   assert.equal(storage.translationServices[0].models[0].displayName, "别名 A");
 });
 
@@ -304,6 +336,9 @@ test("model test dialog checks each model and reports individual results", async
 
   page.field("detail-test-models").click();
   assert.equal(page.field("model-test-dialog").hidden, false);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(requests.length, 0, "opening the dialog must not send paid requests");
+  page.field("start-model-test").click();
   await new Promise((resolve) => page.window.setTimeout(resolve, 20));
 
   assert.equal(requests.length, 2);
@@ -313,12 +348,105 @@ test("model test dialog checks each model and reports individual results", async
   assert.ok(requests.every(({ options }) => options.headers.Authorization === "Bearer key-a"));
   assert.deepEqual([...page.field("model-test-results").querySelectorAll(".model-test-result")]
     .map((item) => item.dataset.state), ["success", "error"]);
-  assert.match(page.field("model-test-results").textContent, /model not found/);
-  assert.equal(page.field("model-test-progress").textContent, "测试完成：1/2 个模型正常。");
+  assert.match(page.field("model-test-results").textContent, /HTTP 404/);
+  assert.match(page.field("model-test-results").textContent, /\d+ ms/);
+  assert.equal(page.field("model-test-progress"), null);
+  const savedResults = page.field("model-test-results").textContent;
 
   page.field("close-model-test").click();
   assert.equal(page.field("model-test-dialog").hidden, true);
   assert.equal(page.field("settings-form").inert, false);
+  page.field("detail-test-models").click();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(page.field("model-test-results").textContent, savedResults);
+  assert.equal(requests.length, 2);
+  const reopened = await openSettings(t, storage);
+  reopened.document.querySelector('[data-select-service="service-1"]').click();
+  reopened.field("detail-test-models").click();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(reopened.field("model-test-results").textContent, savedResults);
+});
+
+test("saved model latencies keep their colors during retests and are isolated by endpoint", async (t) => {
+  const storage = serviceFixture();
+  const service = storage.translationServices[0];
+  service.models = ["fast", "medium", "slow"].map((id) => ({ id }));
+  [250, 5000, 15000].forEach((latencyMs, index) => {
+    storage["modelTestResult:" + JSON.stringify([service.id, service.baseUrl, service.models[index].id])] =
+      { state: "success", message: "", latencyMs, testedAt: Date.now() };
+  });
+  const page = await openSettings(t, storage);
+  page.document.querySelector('[data-select-service="service-1"]').click();
+  const pending = [];
+  page.window.fetch = (url, options) => new Promise((resolve) => pending.push({ resolve, options }));
+  page.field("detail-test-models").click();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual([...page.field("model-test-results").children].map((row) => row.dataset.latency), ["fast", "medium", "slow"]);
+  page.field("start-model-test").click();
+  assert.equal(pending.length, 3);
+  assert.match(page.field("model-test-results").textContent, /250 ms/);
+  assert.match(page.field("model-test-results").textContent, /测试中/);
+  page.field("close-model-test").click();
+  assert.ok(pending.every(({ options }) => options.signal.aborted));
+  page.field("detail-base-url").value = "https://changed.example/v1";
+  page.field("detail-base-url").dispatchEvent(new page.window.Event("input"));
+  page.field("detail-test-models").click();
+  await new Promise((resolve) => setImmediate(resolve));
+  pending.forEach(({ resolve }) => resolve({ ok: true, json: async () => ({ choices: [{ message: { content: "OK" } }] }) }));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok([...page.field("model-test-results").children].every((row) => row.dataset.state === "untested"));
+  assert.equal(Object.keys(storage).filter((key) => key.startsWith("modelTestResult:")).length, 3);
+});
+
+test("parallel model tests stop queued models on close", async (t) => {
+  const storage = serviceFixture();
+  storage.translationServices[0].models = ["a", "b", "c", "d", "e"].map((id) => ({ id }));
+  const page = await openSettings(t, storage);
+  page.document.querySelector('[data-select-service="service-1"]').click();
+  const pending = [];
+  page.window.fetch = (url, options) => new Promise((resolve) => pending.push({ resolve, options }));
+  page.field("detail-test-models").click();
+  await new Promise((resolve) => setImmediate(resolve));
+  page.field("start-model-test").click();
+  assert.equal(pending.length, 3);
+  pending[0].resolve({ ok: true, json: async () => ({ choices: [{ message: { content: "OK" } }] }) });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(pending.length, 4, "a completed request frees one slot");
+  page.field("close-model-test").click();
+  assert.ok(pending.slice(1).every(({ options }) => options.signal.aborted));
+  pending.slice(1).forEach(({ resolve }) => resolve({ ok: true, json: async () => ({ choices: [{ message: { content: "OK" } }] }) }));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(pending.length, 4, "the last queued model must not be sent");
+  assert.equal(Object.keys(storage).filter((key) => key.startsWith("modelTestResult:")).length, 1);
+});
+
+test("model tests show concise HTML errors and time out stalled response bodies", async (t) => {
+  const storage = serviceFixture();
+  storage.translationServices[0].models = [{ id: "html" }, { id: "stalled" }];
+  const page = await openSettings(t, storage);
+  page.document.querySelector('[data-select-service="service-1"]').click();
+  const deadlines = [];
+  const originalTimeout = page.window.setTimeout.bind(page.window);
+  page.window.setTimeout = (callback, delay) => {
+    if (delay === 20000) deadlines.push(callback);
+    return originalTimeout(callback, delay);
+  };
+  page.window.fetch = async (url, options) => ({
+    ok: true,
+    json: () => JSON.parse(options.body).model === "html"
+      ? Promise.reject(new SyntaxError("Unexpected token '<', <!DOCTYPE html>"))
+      : new Promise((resolve, reject) => options.signal.addEventListener("abort", () => reject(new Error("aborted"))))
+  });
+  page.field("detail-test-models").click();
+  await new Promise((resolve) => setImmediate(resolve));
+  page.field("start-model-test").click();
+  await new Promise((resolve) => setImmediate(resolve));
+  deadlines[1]();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(page.field("model-test-results").textContent, /返回非 JSON 数据/);
+  assert.match(page.field("model-test-results").textContent, /请求超时/);
+  assert.doesNotMatch(page.field("model-test-results").textContent, /DOCTYPE/);
+  assert.equal(page.field("start-model-test").disabled, false);
 });
 
 test("late detail model responses cannot overwrite the newly selected service", async (t) => {

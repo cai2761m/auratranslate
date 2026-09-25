@@ -266,12 +266,31 @@
           <div class="modal" id="model-test-dialog" role="dialog" aria-modal="true" aria-labelledby="model-test-title" hidden>
             <div class="modal-backdrop" data-close="model-test"></div>
             <div class="modal-panel">
-              <h2 id="model-test-title">测试模型</h2>
-              <p class="model-test-note">每个模型会发送一条简短请求，最多同时测试 3 个，可能产生少量 API 费用。</p>
-              <p id="model-test-progress" class="model-test-progress" role="status" aria-live="polite"></p>
+              <div class="model-test-heading">
+                <h2 id="model-test-title">测试模型</h2>
+                <button type="button" id="start-model-test">测试</button>
+              </div>
               <ul id="model-test-results" class="model-test-results"></ul>
               <div class="modal-actions">
                 <button type="button" id="close-model-test" class="secondary">关闭</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="modal model-picker-modal" id="model-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="model-picker-title" hidden>
+            <div class="modal-backdrop" data-close="model-picker"></div>
+            <div class="modal-panel">
+              <h2 id="model-picker-title">选择要添加的模型</h2>
+              <p id="model-picker-summary" class="model-picker-summary" role="status"></p>
+              <p id="model-picker-selected-count" class="model-picker-selected-count" role="status" aria-live="polite">已选 0 个模型</p>
+              <div class="model-picker-actions">
+                <button type="button" id="model-picker-select-all" class="ghost">全选新增模型</button>
+                <button type="button" id="model-picker-clear" class="ghost">清空选择</button>
+              </div>
+              <ul id="model-picker-list" class="model-picker-list"></ul>
+              <div class="modal-actions">
+                <button type="button" id="model-picker-cancel" class="secondary">取消</button>
+                <button type="button" id="model-picker-add" disabled>添加所选模型</button>
               </div>
             </div>
           </div>

@@ -491,14 +491,15 @@ button.ghost.danger:hover {
   margin-bottom: 16px;
 }
 
-.model-test-note,
-.model-test-progress {
-  font-size: 13px;
+.model-test-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
 }
 
-.model-test-progress {
-  margin-top: 10px;
-  min-height: 20px;
+.model-test-heading h2 {
+  margin: 0;
 }
 
 .model-test-results {
@@ -523,21 +524,101 @@ button.ghost.danger:hover {
 }
 
 .model-test-result-name {
+  flex: 1;
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
 .model-test-result-status {
-  flex: 0 0 auto;
+  max-width: 50%;
+  text-align: right;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
   color: #64748b;
 }
 
-.model-test-result[data-state="success"] .model-test-result-status {
+.model-test-result-phase {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.model-test-result[data-latency="fast"] .model-test-result-status {
   color: #15803d;
 }
 
-.model-test-result[data-state="error"] .model-test-result-status {
+.model-test-result[data-latency="medium"] .model-test-result-status {
+  color: #a16207;
+}
+
+.model-test-result[data-latency="slow"] .model-test-result-status {
   color: #b91c1c;
+}
+
+.model-picker-modal {
+  z-index: 22;
+}
+
+.model-picker-summary,
+.model-picker-selected-count {
+  font-size: 13px;
+}
+
+.model-picker-selected-count {
+  margin-top: 8px;
+  color: #64748b;
+}
+
+.model-picker-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.model-picker-list {
+  display: grid;
+  gap: 6px;
+  max-height: min(52vh, 420px);
+  overflow-y: auto;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.model-picker-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 11px;
+  border: 1px solid #e2e8f0;
+  border-radius: 7px;
+  font-size: 13px;
+}
+
+.model-picker-item label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.model-picker-item input {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+.model-picker-item-name {
+  overflow-wrap: anywhere;
+}
+
+.model-picker-item small {
+  flex: 0 0 auto;
+  color: #64748b;
 }
 
 .model-rows {
