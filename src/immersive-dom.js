@@ -126,7 +126,6 @@
     "canvas",
     "pre",
     "code",
-    UI_SELECTOR,
     "[contenteditable='true']",
     "[translate='no']",
     "[aria-hidden='true']",
@@ -135,7 +134,8 @@
   ].join(",");
   // Documentation callouts and page outlines are readable content, even when
   // their sites use the same semantic tags as global navigation/sidebar chrome.
-  const TOC_SELECTOR = "#toc, #toc-side, .toc, .table-of-contents, [role='doc-toc'], [aria-label='Table of contents' i]";
+  const TOC_SELECTOR = "#toc, #toc-side, .toc, .table-of-contents, [role='doc-toc'], [aria-label='Table of contents' i], #pagenav > #pagenav-content";
+  const OUTLINE_DECORATION_SELECTOR = "#pagenav-content .page-number";
   const CALLOUT_SELECTOR = "aside.alert, aside.admonition, aside.callout, aside[role='note']";
   const CALLOUT_TITLE_SELECTOR = ".alert-header, .admonition-title, .callout-title";
   const CONTENT_SCOPE_SELECTOR = [
@@ -237,11 +237,12 @@
   const MAX_BLOCKS = 240;
   const MIN_TEXT_LENGTH = 24;
   const MAX_TEXT_LENGTH = 4000;
-  function collectBlocks() {
+  function collectBlocks({ outlinesOnly = false } = {}) {
     const candidates = collectCandidateElements();
     const blocks = [];
 
-    for (const element of candidates) {
+    for (let element of candidates) {
+      if (outlinesOnly && !element.closest(TOC_SELECTOR)) continue;
       if (blocks.length >= MAX_BLOCKS) {
         break;
       }
@@ -254,7 +255,10 @@
         continue;
       }
 
-      const id = `im${blocks.length}`;
+      element = App.prepareOutlineLabel(element);
+
+      const id = `im${state.nextBlockId || 0}`;
+      state.nextBlockId = (state.nextBlockId || 0) + 1;
       element.dataset.ytbtImmersiveSource = id;
       element.classList.add("ytbt-immersive-source");
       blocks.push({ id, element, sourceText: text, ...App.extractInlineFormatting(element) });
@@ -364,7 +368,7 @@
     for (const descendant of element.querySelectorAll(`${UI_SELECTOR}, nav, aside, [role='navigation']`)) {
       if (isExcludedFromTranslation(descendant)) return false;
     }
-    if (element.closest("[data-ytbt-immersive-source]")) {
+    if (element.closest("[data-ytbt-immersive-source]") || element.querySelector("[data-ytbt-immersive-source]")) {
       return false;
     }
     if (isInSiteChromeHeader(element)) {
@@ -398,11 +402,18 @@
   }
 
   function isExcludedFromTranslation(element) {
-    if (element.closest(SKIP_SELECTOR)) {
+    if (element.closest(SKIP_SELECTOR) || element.closest(OUTLINE_DECORATION_SELECTOR)) {
       return true;
     }
     const toc = element.closest(TOC_SELECTOR);
     for (let ancestor = element; ancestor; ancestor = ancestor.parentElement) {
+      // A document outline may use dropdown/menu semantics. Only its root
+      // and actual links are content; controls and unrelated menus stay out.
+      if (ancestor.matches(UI_SELECTOR) &&
+          !(toc && ancestor === toc && ancestor.matches(".dropdown-content, [role='menu']")) &&
+          !(toc && toc.contains(ancestor) && ancestor.matches("a[href][role='menuitem']"))) {
+        return true;
+      }
       if (!ancestor.matches("nav, aside, [role='navigation']")) {
         continue;
       }
@@ -448,6 +459,9 @@
     for (const injected of clone.querySelectorAll("[data-ytbt-immersive-translation], [aria-hidden='true']")) {
       injected.remove();
     }
+    if (element.closest("#pagenav-content")) {
+      for (const number of clone.querySelectorAll(".page-number")) number.remove();
+    }
 
     const text = Core.normalizeSubtitleText(clone.textContent || "");
     if (text.length > MAX_TEXT_LENGTH) {
@@ -492,11 +506,11 @@
     return Boolean(
       element &&
         (element.matches(SHORT_TEXT_SELECTOR) ||
-          (element.closest(TOC_SELECTOR) && element.matches("a[href], header, header span")) ||
+          (element.closest(TOC_SELECTOR) && element.matches("a[href], header, header span, .page-divider")) ||
           (element.closest(CALLOUT_SELECTOR) && element.closest(CALLOUT_TITLE_SELECTOR)) ||
           (element.closest(CONTENT_SCOPE_SELECTOR) && element.matches(SHORT_TEXT_CLASS_SELECTOR)))
     );
   }
 
-  Object.assign(App, { TOC_SELECTOR, CALLOUT_SELECTOR, CALLOUT_TITLE_SELECTOR, collectBlocks });
+  Object.assign(App, { TOC_SELECTOR, OUTLINE_DECORATION_SELECTOR, CALLOUT_SELECTOR, CALLOUT_TITLE_SELECTOR, collectBlocks });
 })();

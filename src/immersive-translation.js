@@ -106,18 +106,27 @@
     }
   }
 
-  async function translateCurrentPage() {
+  async function translateCurrentPage({ appendOutlines = false } = {}) {
     if (state.mode === "translating") return;
+    // New outline entries may be translated after a successful run. Never use
+    // an expansion event to restart failed or ambiguously delivered requests.
+    if (appendOutlines && (!state.translated || state.mode !== "done" || !state.visible)) return;
+    const previousMode = state.mode;
     App.updateBallMode("translating");
     await state.preferencesReady;
     syncPageIdentity();
+    if (appendOutlines && !state.translated) return;
     state.runPreferences = { ...state.preferences };
     const pageUrl = state.pageUrl;
     clearRecovery();
-    App.clearExistingTranslations();
-    state.translated = false;
-    const blocks = App.collectBlocks();
+    if (!appendOutlines) App.clearExistingTranslations();
+    const blocks = App.collectBlocks({ outlinesOnly: appendOutlines });
     if (!blocks.length) {
+      if (appendOutlines) {
+        App.updateBallMode(previousMode);
+        return;
+      }
+      state.translated = false;
       App.updateBallMode("idle");
       App.showStatus("当前页面没有找到可翻译的正文。");
       return;

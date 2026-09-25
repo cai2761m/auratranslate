@@ -5,12 +5,26 @@
   const App = globalThis.YTBTImmersive;
   if (!App) return;
 
+  function prepareOutlineLabel(element) {
+    if (!element.matches("#pagenav-content a[href]")) return element;
+    // Keep the number/icon as the first flex item, with source and translation
+    // stacked together in the label. Move nodes so link handlers stay intact.
+    const label = document.createElement("span");
+    label.dataset.ytbtOutlineLabel = "true";
+    for (const child of Array.from(element.childNodes)) {
+      if (!child.matches?.(`${App.OUTLINE_DECORATION_SELECTOR}, [aria-hidden='true']`)) label.appendChild(child);
+    }
+    element.appendChild(label);
+    return label;
+  }
+
   function extractInlineFormatting(element) {
     const formats = new Map();
     const tags = new Set(["CODE", "KBD", "SAMP", "STRONG", "B", "EM", "I", "A", "S", "DEL", "U", "MARK", "SUB", "SUP", "BR"]);
     function visit(node) {
       if (node.nodeType === Node.TEXT_NODE) return node.textContent;
       if (node.nodeType !== Node.ELEMENT_NODE || node.matches("[data-ytbt-immersive-translation], [aria-hidden='true'], script, style")) return "";
+      if (node.matches(App.OUTLINE_DECORATION_SELECTOR)) return "";
       if (!tags.has(node.tagName)) return Array.from(node.childNodes, visit).join("");
       const key = `${node.tagName}_${formats.size}`;
       const template = document.createElement(node.tagName.toLowerCase());
@@ -101,6 +115,7 @@
   }
 
   function clearExistingTranslations() {
+    App.state.nextBlockId = 0;
     App.restoreOriginalNodes();
     for (const node of document.querySelectorAll("[data-ytbt-immersive-translation]")) {
       node.remove();
@@ -109,6 +124,7 @@
       delete source.dataset.ytbtImmersiveSource;
       source.classList.remove("ytbt-immersive-source");
     }
+    for (const label of document.querySelectorAll("[data-ytbt-outline-label]")) label.replaceWith(...label.childNodes);
   }
 
   function createTranslationContainer(block) {
@@ -119,7 +135,7 @@
 
     const container = document.createElement("span");
     container.className = "ytbt-immersive-translation";
-    if ((block.element.closest(App.TOC_SELECTOR) && block.element.matches("a[href]")) ||
+    if ((block.element.closest(App.TOC_SELECTOR) && block.element.matches("a[href], [data-ytbt-outline-label]")) ||
         (block.element.closest(App.CALLOUT_SELECTOR) && block.element.closest(App.CALLOUT_TITLE_SELECTOR))) {
       container.classList.add("ytbt-immersive-stacked");
     }
@@ -171,6 +187,7 @@
   }
 
   Object.assign(App, {
+    prepareOutlineLabel,
     extractInlineFormatting,
     clearExistingTranslations,
     createTranslationContainer,

@@ -76,22 +76,100 @@ test("Flutter callout titles and list items translate once without icon ligature
   assert.equal(document.querySelectorAll("[aria-hidden] [data-ytbt-immersive-translation], code [data-ytbt-immersive-translation]").length, 0);
 });
 
-test("Flutter pathway dropdown ancestors never become translated body blocks", async (t) => {
+test("Flutter pathway translates separate outline entries without flattening wrappers", async (t) => {
   const fixture = fs.readFileSync(path.join(__dirname, "fixtures/flutter-pathway-navigation.html"), "utf8");
   for (const expanded of [false, true]) {
-    await t.test(expanded ? "open dropdown" : "closed dropdown", async (t) => {
+    await t.test(expanded ? "open before translation" : "open after translation", async (t) => {
       const html = expanded ? fixture.replace('data-expanded="false"', 'data-expanded="true"')
         : fixture.replace('id="pagenav-content"', 'id="pagenav-content" style="display: none"');
       const { document, texts, requests } = await translatePage(t, html);
-      assert.deepEqual(texts, ["Flutter learning pathway",
-        "This learning pathway walks you through the basics of both Dart and Flutter."]);
-      assert.equal(document.querySelector("#site-subheader [data-ytbt-immersive-translation]"), null);
-      assert.equal(document.querySelector("#site-subheader[data-ytbt-immersive-source]"), null);
-      assert.ok(requests.every((request) => request.items.every((item) =>
-        !/Quick install|ChangeNotifier|ListenableBuilder/.test(item.formattedText || item.sourceText))));
-      assert.equal(document.querySelectorAll("article [data-ytbt-state='done']").length, 2);
+      const menu = document.querySelector("#pagenav-content");
+      const bodyTranslation = document.querySelector("article [data-ytbt-state='done']");
+      if (!expanded) {
+        assert.deepEqual(texts, ["Flutter learning pathway",
+          "This learning pathway walks you through the basics of both Dart and Flutter."]);
+        assert.equal(menu.querySelector("[data-ytbt-immersive-translation]"), null);
+        menu.style.display = "block";
+        document.querySelector("#pagenav").dataset.expanded = "true";
+        await waitUntil(() => menu.querySelectorAll("[data-ytbt-state='done']").length === 24, { delayMs: 20 });
+      }
+      assert.equal(menu.querySelectorAll("[data-ytbt-state='done']").length, 24);
+      assert.equal(document.querySelector("#site-subheader[data-ytbt-immersive-source], #pagenav[data-ytbt-immersive-source], #pagenav-content[data-ytbt-immersive-source]"), null);
+      assert.equal(document.querySelector(".dropdown-button [data-ytbt-immersive-translation]"), null);
+      const paid = requests.filter((request) => !request.cacheOnly).flatMap((request) => Array.from(request.items));
+      assert.equal(paid.length, 26);
+      assert.equal(new Set(paid.map((item) => item.id)).size, 26);
+      assert.ok(paid.some((item) => item.sourceText === "DevTools"));
+      assert.ok(paid.some((item) => item.sourceText === "Quick install"));
+      assert.ok(paid.some((item) => item.sourceText === "Use ChangeNotifier to update app state" && item.formattedText.includes("[[YTBT_CODE_")));
+      assert.ok(paid.every((item) => !/^\d/.test(item.sourceText) && !/school/.test(item.sourceText)));
+      assert.ok(paid.every((item) => !(item.sourceText.includes("Quick install") && item.sourceText.includes("DevTools"))));
+      assert.equal(document.querySelector("article [data-ytbt-state='done']"), bodyTranslation);
+      for (const link of menu.querySelectorAll("a[href]")) {
+        assert.equal(link.querySelectorAll("[data-ytbt-state='done']").length, 1);
+        assert.ok(link.querySelector(":scope > [data-ytbt-outline-label] > .ytbt-immersive-stacked"));
+      }
+      assert.deepEqual(Array.from(menu.querySelectorAll(".page-number"), (node) => node.textContent), Array.from({ length: 18 }, (_, i) => String(i + 1)));
+      assert.equal(menu.querySelectorAll(".ytbt-immersive-text code").length, 2);
+      const requestCount = requests.length;
+      menu.style.display = "none";
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      menu.style.display = "block";
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      assert.equal(requests.length, requestCount);
+      assert.equal(menu.querySelectorAll("[data-ytbt-state='done']").length, 24);
     });
   }
+});
+
+test("opening an outline never retries an uncertain body request", async (t) => {
+  const fixture = fs.readFileSync(path.join(__dirname, "fixtures/flutter-pathway-navigation.html"), "utf8")
+    .replace('id="pagenav-content"', 'id="pagenav-content" style="display: none"');
+  const { document, requests } = await translatePage(t, fixture, {
+    expectedState: "error",
+    sendMessage: async (message) => {
+      if (message.cacheOnly) return { ok: true, items: [] };
+      throw new Error("message port closed");
+    }
+  });
+  const paidCount = requests.filter((request) => !request.cacheOnly).length;
+  document.querySelector("#pagenav-content").style.display = "block";
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  assert.equal(requests.filter((request) => !request.cacheOnly).length, paidCount);
+});
+
+test("cached outline expansion preserves link nodes, numbering and display modes", async (t) => {
+  const fixture = fs.readFileSync(path.join(__dirname, "fixtures/flutter-pathway-navigation.html"), "utf8")
+    .replace('id="pagenav-content"', 'id="pagenav-content" style="display: none"');
+  let originalLink;
+  let originalCode;
+  let clicks = 0;
+  const { document, requests } = await translatePage(t, fixture, {
+    setup(window) {
+      originalLink = window.document.querySelector("a[href$='/change-notifier']");
+      originalCode = originalLink.querySelector("code");
+      originalLink.addEventListener("click", (event) => { event.preventDefault(); clicks += 1; });
+    },
+    sendMessage: async (message) => translatedResponse(message)
+  });
+  const app = document.defaultView.YTBTImmersive;
+  app.state.preferences.immersiveDisplayMode = "translation";
+  app.applyDisplayMode();
+  document.querySelector("#pagenav-content").style.display = "block";
+  await waitUntil(() => document.querySelectorAll("#pagenav-content [data-ytbt-state='done']").length === 24, { delayMs: 20 });
+  assert.ok(requests.every((request) => request.cacheOnly));
+  assert.equal(document.querySelector("a[href$='/change-notifier']"), originalLink);
+  assert.equal(originalLink.querySelector(":scope > .page-number").textContent, "12");
+  assert.ok(originalCode.closest("[data-ytbt-original]"));
+  assert.equal(originalLink.querySelector(".page-number").closest("[data-ytbt-original]"), null);
+  originalLink.click();
+  assert.equal(clicks, 1);
+  app.state.preferences.immersiveDisplayMode = "bilingual";
+  app.applyDisplayMode();
+  app.clearExistingTranslations();
+  assert.equal(originalLink.querySelector("code"), originalCode);
+  assert.equal(originalLink.querySelector("[data-ytbt-outline-label], [data-ytbt-original]"), null);
+  assert.equal(originalLink.textContent, "12Use ChangeNotifier to update app state");
 });
 
 test("Flutter outline outside main translates short links and retains anchors", async (t) => {

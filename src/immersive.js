@@ -36,6 +36,25 @@
       App.recoverCachedTranslations();
     });
     window.addEventListener("popstate", App.syncPageIdentity);
+    // Expanding a document outline should fill only its newly visible entries.
+    // Ignore our own leaf mutations, and wait for an active run to finish.
+    let outlineTimer;
+    const translateOpenedOutline = () => {
+      if (state.mode === "translating") {
+        outlineTimer = setTimeout(translateOpenedOutline, 200);
+        return;
+      }
+      App.translateCurrentPage({ appendOutlines: true });
+    };
+    const outlineObserver = new MutationObserver((mutations) => {
+      const outlines = Array.from(document.querySelectorAll(App.TOC_SELECTOR));
+      if (!mutations.some(({ target }) => outlines.some((outline) =>
+        target === outline || target.contains(outline)))) return;
+      clearTimeout(outlineTimer);
+      outlineTimer = setTimeout(translateOpenedOutline, 100);
+    });
+    outlineObserver.observe(root, { subtree: true, attributes: true,
+      attributeFilter: ["class", "style", "hidden", "aria-expanded", "data-expanded"] });
     // SPA navigation need not dispatch popstate. Never attribute old text to
     // a new URL or let an old response change the new page's controls.
     setInterval(App.syncPageIdentity, 1000);

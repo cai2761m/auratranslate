@@ -169,6 +169,11 @@ span > .ytbt-immersive-translation::before {
   font-weight: inherit;
 }
 
+[data-ytbt-outline-label] {
+  min-width: 0;
+  flex: 1;
+}
+
 .ytbt-immersive-translation.ytbt-immersive-stacked {
   display: block;
   width: 100%;
