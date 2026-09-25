@@ -8,6 +8,9 @@
 
   const BALL_EDGE_PADDING_PX = 8;
   const BALL_DRAG_THRESHOLD_PX = 4;
+  let themeObserver = null;
+  let themeUpdateScheduled = false;
+
   function mountControls() {
     if (state.ball || !document.body) {
       return;
@@ -49,7 +52,67 @@
     state.panel = panel;
     loadBallPosition();
     updateBallMode("idle");
+    updateBallTheme();
+    observePageTheme();
     state.preferencesReady.then(maybeAutoTranslate);
+  }
+
+  function observePageTheme() {
+    const scheduleUpdate = () => {
+      if (themeUpdateScheduled) return;
+      themeUpdateScheduled = true;
+      requestAnimationFrame(() => {
+        themeUpdateScheduled = false;
+        updateBallTheme();
+      });
+    };
+
+    themeObserver = new MutationObserver(scheduleUpdate);
+    for (const element of [document.documentElement, document.body]) {
+      if (element) themeObserver.observe(element, { attributes: true, attributeFilter: ["class", "style"] });
+    }
+    window.addEventListener("scroll", scheduleUpdate, { passive: true, capture: true });
+    window.addEventListener("resize", scheduleUpdate, { passive: true });
+    window.addEventListener("pageshow", scheduleUpdate);
+    const colorScheme = window.matchMedia?.("(prefers-color-scheme: dark)");
+    colorScheme?.addEventListener?.("change", scheduleUpdate);
+  }
+
+  function updateBallTheme() {
+    if (!state.ball) return;
+    const rect = state.ball.getBoundingClientRect();
+    const x = App.clamp(rect.left - 3, 0, Math.max(0, window.innerWidth - 1));
+    const y = App.clamp(rect.top + rect.height / 2, 0, Math.max(0, window.innerHeight - 1));
+    const layers = document.elementsFromPoint?.(x, y) || [];
+    const pageElement = layers.find((element) => !element.closest?.("[data-ytbt-immersive-root]"));
+    const brightness = samplePageBrightness(pageElement);
+    state.ball.dataset.ytbtTheme = brightness >= 0.5 ? "light" : "dark";
+  }
+
+  function samplePageBrightness(element) {
+    const scheme = getComputedStyle(document.documentElement).colorScheme || "";
+    const prefersDark = window.matchMedia?.("(prefers-color-scheme: dark)").matches;
+    let color = scheme.includes("dark") || prefersDark ? [0, 0, 0] : [255, 255, 255];
+
+    for (let current = element; current; current = current.parentElement) {
+      const background = parseRgba(getComputedStyle(current).backgroundColor);
+      if (!background) continue;
+      const alpha = background[3];
+      color = background.slice(0, 3).map((channel, index) => channel * alpha + color[index] * (1 - alpha));
+      if (alpha >= 1) break;
+    }
+
+    const linear = color.map((channel) => {
+      const value = channel / 255;
+      return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+    });
+    return linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722;
+  }
+
+  function parseRgba(value) {
+    const channels = value?.match(/[\d.]+/g)?.map(Number);
+    if (!channels || channels.length < 3) return null;
+    return [channels[0], channels[1], channels[2], channels.length > 3 ? channels[3] : 1];
   }
 
   async function loadPreferences() {
@@ -174,6 +237,7 @@
       event.stopPropagation();
       drag.suppressClick = true;
       state.ball.style.right = "0px";
+      updateBallTheme();
       saveBallPosition();
     }
     cancelBallDrag();

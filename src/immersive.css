@@ -11,7 +11,7 @@
   height: 36px;
   padding: 0;
   margin: 0;
-  background: #ffffff;
+  background: var(--ytbt-ball-background, #ffffff);
   border-radius: 999px 0 0 999px;
   box-shadow: -2px 4px 12px rgba(0, 0, 0, 0.08);
   cursor: grab;
@@ -25,13 +25,13 @@
     border-radius 160ms ease,
     border-color 160ms ease,
     box-shadow 160ms ease;
-  border: 1px solid rgba(0, 0, 0, 0.06);
+  border: 1px solid var(--ytbt-ball-border, rgba(0, 0, 0, 0.06));
   border-right-color: transparent;
 }
 
 .ytbt-immersive-tab:hover {
   box-shadow: -4px 6px 20px rgba(0, 0, 0, 0.15);
-  background: #ffffff;
+  background: var(--ytbt-ball-background, #ffffff);
 }
 
 .ytbt-immersive-tab:active {
@@ -41,7 +41,7 @@
 .ytbt-immersive-tab.ytbt-immersive-dragging {
   cursor: grabbing;
   border-radius: 999px;
-  border-right-color: rgba(0, 0, 0, 0.06);
+  border-right-color: var(--ytbt-ball-border, rgba(0, 0, 0, 0.06));
   transition: box-shadow 120ms ease, border-radius 120ms ease, border-color 120ms ease;
 }
 
@@ -57,9 +57,9 @@
   margin: 0;
   border: none;
   border-radius: 999px;
-  background: linear-gradient(145deg, #fb9bb7, #f472b6);
-  color: #fff;
-  box-shadow: 0 4px 10px rgba(190, 24, 93, 0.22);
+  background: var(--ytbt-ball-background, #111827);
+  color: var(--ytbt-ball-foreground, #ffffff);
+  box-shadow: 0 4px 10px var(--ytbt-ball-shadow, rgba(15, 23, 42, 0.24));
   pointer-events: none;
   transition: transform 160ms ease;
 }
@@ -81,7 +81,7 @@
   box-sizing: border-box;
   width: 12px;
   height: 12px;
-  border: 1px solid #fff;
+  border: 1px solid var(--ytbt-ball-foreground, #fff);
   border-radius: 50%;
   background: #8cdb79;
   color: #fff;
@@ -90,8 +90,18 @@
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
 }
 
-.ytbt-immersive-tab[data-ytbt-state="error"] .ytbt-immersive-ball {
-  background: linear-gradient(145deg, #b91c1c, #ef4444);
+.ytbt-immersive-tab[data-ytbt-theme="light"] {
+  --ytbt-ball-background: #111827;
+  --ytbt-ball-foreground: #ffffff;
+  --ytbt-ball-border: rgba(255, 255, 255, 0.14);
+  --ytbt-ball-shadow: rgba(15, 23, 42, 0.28);
+}
+
+.ytbt-immersive-tab[data-ytbt-theme="dark"] {
+  --ytbt-ball-background: #ffffff;
+  --ytbt-ball-foreground: #111827;
+  --ytbt-ball-border: rgba(15, 23, 42, 0.14);
+  --ytbt-ball-shadow: rgba(255, 255, 255, 0.22);
 }
 
 .ytbt-immersive-panel {
