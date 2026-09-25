@@ -287,9 +287,15 @@ test("model test dialog checks each model and reports individual results", async
   const page = await openSettings(t, storage);
   page.document.querySelector('[data-select-service="service-1"]').click();
   const requests = [];
+  let activeRequests = 0;
+  let peakRequests = 0;
   page.window.fetch = async (url, options) => {
     const request = JSON.parse(options.body);
     requests.push({ url, options, request });
+    activeRequests += 1;
+    peakRequests = Math.max(peakRequests, activeRequests);
+    await new Promise((resolve) => page.window.setTimeout(resolve, 5));
+    activeRequests -= 1;
     if (request.model === "model-a") {
       return { ok: true, json: async () => ({ choices: [{ message: { content: "OK" } }] }) };
     }
@@ -298,9 +304,10 @@ test("model test dialog checks each model and reports individual results", async
 
   page.field("detail-test-models").click();
   assert.equal(page.field("model-test-dialog").hidden, false);
-  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => page.window.setTimeout(resolve, 20));
 
   assert.equal(requests.length, 2);
+  assert.equal(peakRequests, 2, "both model checks should be in flight together");
   assert.deepEqual(requests.map(({ request }) => request.model), ["model-a", "model-b"]);
   assert.ok(requests.every(({ url }) => url === "https://a.example/v1/chat/completions"));
   assert.ok(requests.every(({ options }) => options.headers.Authorization === "Bearer key-a"));

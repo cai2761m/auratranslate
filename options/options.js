@@ -57,6 +57,7 @@
     { id: "general-settings", label: "通用设置" }
   ];
   const DEFAULT_SUB_PAGE = SUB_PAGES[0].id;
+  const MODEL_TEST_CONCURRENCY = 3;
 
   const editor = {
     services: [],
@@ -64,7 +65,7 @@
     dialogVersion: 0,
     detailRequest: null,
     modelTestVersion: 0,
-    modelTestAbort: null,
+    modelTestControllers: new Set(),
     editingServiceId: "",
     opener: null,
     translationServiceId: "",
@@ -318,7 +319,7 @@
     detailFetchModels.disabled = !!editor.detailRequest;
     if (detailTestModels) {
       detailTestModels.hidden = !service;
-      detailTestModels.disabled = !!editor.modelTestAbort;
+      detailTestModels.disabled = editor.modelTestControllers.size > 0;
     }
     document.querySelector("#detail-add-model").hidden = !service;
     renderDetailModels(service);
@@ -777,7 +778,7 @@
 
   async function testDetailModels() {
     const service = serviceById(editor.selectedServiceId);
-    if (!service || !modelTestDialog || !modelTestResults || editor.modelTestAbort) return;
+    if (!service || !modelTestDialog || !modelTestResults || editor.modelTestControllers.size) return;
 
     const models = service.models.filter((model) => model.id.trim());
     const version = ++editor.modelTestVersion;
@@ -813,52 +814,67 @@
       return;
     }
 
+    let nextIndex = 0;
+    let completed = 0;
     let passed = 0;
-    for (let index = 0; index < models.length; index += 1) {
-      if (version !== editor.modelTestVersion) return;
-      const model = models[index];
-      const item = modelTestResults.children[index];
-      const result = item.querySelector(".model-test-result-status");
-      result.textContent = "测试中…";
-      modelTestProgress.textContent = `正在测试 ${index + 1}/${models.length}：${model.id}`;
+    const testNextModel = async () => {
+      while (version === editor.modelTestVersion) {
+        const index = nextIndex++;
+        if (index >= models.length) return;
+        const model = models[index];
+        const item = modelTestResults.children[index];
+        const result = item.querySelector(".model-test-result-status");
+        result.textContent = "测试中…";
 
-      const controller = new AbortController();
-      editor.modelTestAbort = controller;
-      const timer = setTimeout(() => controller.abort(), 20000);
-      try {
-        const response = await fetch(Core.buildChatCompletionsUrl(baseUrl), {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
-          },
-          body: JSON.stringify({
-            model: model.id,
-            messages: [{ role: "user", content: "Reply with OK." }]
-          }),
-          signal: controller.signal
-        });
-        const payload = await response.json();
-        if (!response.ok) {
-          const reason = payload?.error?.message || payload?.message || `HTTP ${response.status}`;
-          throw new Error(reason);
+        const controller = new AbortController();
+        editor.modelTestControllers.add(controller);
+        const timer = setTimeout(() => controller.abort(), 20000);
+        try {
+          const response = await fetch(Core.buildChatCompletionsUrl(baseUrl), {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
+            },
+            body: JSON.stringify({
+              model: model.id,
+              messages: [{ role: "user", content: "Reply with OK." }]
+            }),
+            signal: controller.signal
+          });
+          const payload = await response.json();
+          if (!response.ok) {
+            const reason = payload?.error?.message || payload?.message || `HTTP ${response.status}`;
+            throw new Error(reason);
+          }
+          if (payload?.error) throw new Error(payload.error.message || "接口返回错误");
+          if (!Array.isArray(payload?.choices) || payload.choices.length === 0) {
+            throw new Error("接口未返回有效的模型回复");
+          }
+          item.dataset.state = "success";
+          result.textContent = "正常";
+          passed += 1;
+        } catch (error) {
+          if (version !== editor.modelTestVersion) return;
+          item.dataset.state = "error";
+          result.textContent = controller.signal.aborted ? "请求超时" : shortModelTestError(error);
+        } finally {
+          clearTimeout(timer);
+          editor.modelTestControllers.delete(controller);
         }
-        if (payload?.error) throw new Error(payload.error.message || "接口返回错误");
-        if (!Array.isArray(payload?.choices) || payload.choices.length === 0) {
-          throw new Error("接口未返回有效的模型回复");
+
+        completed += 1;
+        if (version === editor.modelTestVersion) {
+          modelTestProgress.textContent = `已完成 ${completed}/${models.length} 个模型，其他请求继续测试中。`;
         }
-        item.dataset.state = "success";
-        result.textContent = "正常";
-        passed += 1;
-      } catch (error) {
-        if (version !== editor.modelTestVersion) return;
-        item.dataset.state = "error";
-        result.textContent = controller.signal.aborted ? "请求超时" : shortModelTestError(error);
-      } finally {
-        clearTimeout(timer);
-        if (editor.modelTestAbort === controller) editor.modelTestAbort = null;
       }
-    }
+    };
+
+    modelTestProgress.textContent = `正在并行测试 ${models.length} 个模型（最多 ${Math.min(MODEL_TEST_CONCURRENCY, models.length)} 个同时进行）。`;
+    await Promise.all(Array.from(
+      { length: Math.min(MODEL_TEST_CONCURRENCY, models.length) },
+      () => testNextModel()
+    ));
 
     if (version === editor.modelTestVersion) {
       modelTestProgress.textContent = `测试完成：${passed}/${models.length} 个模型正常。`;
@@ -873,8 +889,8 @@
 
   function closeModelTestDialog() {
     editor.modelTestVersion += 1;
-    editor.modelTestAbort?.abort();
-    editor.modelTestAbort = null;
+    for (const controller of editor.modelTestControllers) controller.abort();
+    editor.modelTestControllers.clear();
     detailTestModels.disabled = false;
     if (modelTestDialog) modelTestDialog.hidden = true;
     form.inert = false;
