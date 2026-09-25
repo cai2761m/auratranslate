@@ -491,6 +491,55 @@ button.ghost.danger:hover {
   margin-bottom: 16px;
 }
 
+.model-test-note,
+.model-test-progress {
+  font-size: 13px;
+}
+
+.model-test-progress {
+  margin-top: 10px;
+  min-height: 20px;
+}
+
+.model-test-results {
+  display: grid;
+  gap: 8px;
+  max-height: min(52vh, 420px);
+  overflow-y: auto;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.model-test-result {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 7px;
+  font-size: 13px;
+}
+
+.model-test-result-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.model-test-result-status {
+  flex: 0 0 auto;
+  color: #64748b;
+}
+
+.model-test-result[data-state="success"] .model-test-result-status {
+  color: #15803d;
+}
+
+.model-test-result[data-state="error"] .model-test-result-status {
+  color: #b91c1c;
+}
+
 .model-rows {
   max-height: 280px;
   overflow-y: auto;

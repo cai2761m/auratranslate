@@ -31,6 +31,10 @@
   const detailApiKey = document.querySelector("#detail-api-key");
   const detailBaseUrl = document.querySelector("#detail-base-url");
   const detailFetchModels = document.querySelector("#detail-fetch-models");
+  const detailTestModels = document.querySelector("#detail-test-models");
+  const modelTestDialog = document.querySelector("#model-test-dialog");
+  const modelTestProgress = document.querySelector("#model-test-progress");
+  const modelTestResults = document.querySelector("#model-test-results");
   const dialog = document.querySelector("#service-dialog");
   const dialogTitle = document.querySelector("#service-dialog-title");
   const serviceName = document.querySelector("#service-name");
@@ -59,6 +63,8 @@
     selectedServiceId: "",
     dialogVersion: 0,
     detailRequest: null,
+    modelTestVersion: 0,
+    modelTestAbort: null,
     editingServiceId: "",
     opener: null,
     translationServiceId: "",
@@ -310,6 +316,10 @@
     document.querySelector("#detail-protocol").value = service ? service.apiProtocol : "";
     detailFetchModels.hidden = !service;
     detailFetchModels.disabled = !!editor.detailRequest;
+    if (detailTestModels) {
+      detailTestModels.hidden = !service;
+      detailTestModels.disabled = !!editor.modelTestAbort;
+    }
     document.querySelector("#detail-add-model").hidden = !service;
     renderDetailModels(service);
     document.querySelector("#detail-model-status").textContent = "";
@@ -765,6 +775,113 @@
     }
   }
 
+  async function testDetailModels() {
+    const service = serviceById(editor.selectedServiceId);
+    if (!service || !modelTestDialog || !modelTestResults || editor.modelTestAbort) return;
+
+    const models = service.models.filter((model) => model.id.trim());
+    const version = ++editor.modelTestVersion;
+    const baseUrl = service.baseUrl.trim();
+    const apiKey = service.apiKey.trim();
+    detailTestModels.disabled = true;
+    modelTestDialog.hidden = false;
+    form.inert = true;
+    document.querySelector(".settings-sidebar").inert = true;
+    modelTestResults.textContent = "";
+    document.querySelector("#close-model-test")?.focus();
+
+    for (const model of models) {
+      const item = document.createElement("li");
+      item.className = "model-test-result";
+      item.dataset.state = "pending";
+      const name = document.createElement("span");
+      name.className = "model-test-result-name";
+      name.textContent = model.displayName ? `${model.displayName}（${model.id}）` : model.id;
+      const result = document.createElement("span");
+      result.className = "model-test-result-status";
+      result.textContent = baseUrl ? "等待测试" : "缺少 API 地址";
+      item.append(name, result);
+      modelTestResults.appendChild(item);
+    }
+
+    if (!models.length) {
+      modelTestProgress.textContent = "当前供应方没有可测试的模型。";
+      return;
+    }
+    if (!baseUrl) {
+      modelTestProgress.textContent = "请先填写 API 地址。";
+      return;
+    }
+
+    let passed = 0;
+    for (let index = 0; index < models.length; index += 1) {
+      if (version !== editor.modelTestVersion) return;
+      const model = models[index];
+      const item = modelTestResults.children[index];
+      const result = item.querySelector(".model-test-result-status");
+      result.textContent = "测试中…";
+      modelTestProgress.textContent = `正在测试 ${index + 1}/${models.length}：${model.id}`;
+
+      const controller = new AbortController();
+      editor.modelTestAbort = controller;
+      const timer = setTimeout(() => controller.abort(), 20000);
+      try {
+        const response = await fetch(Core.buildChatCompletionsUrl(baseUrl), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
+          },
+          body: JSON.stringify({
+            model: model.id,
+            messages: [{ role: "user", content: "Reply with OK." }]
+          }),
+          signal: controller.signal
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          const reason = payload?.error?.message || payload?.message || `HTTP ${response.status}`;
+          throw new Error(reason);
+        }
+        if (payload?.error) throw new Error(payload.error.message || "接口返回错误");
+        if (!Array.isArray(payload?.choices) || payload.choices.length === 0) {
+          throw new Error("接口未返回有效的模型回复");
+        }
+        item.dataset.state = "success";
+        result.textContent = "正常";
+        passed += 1;
+      } catch (error) {
+        if (version !== editor.modelTestVersion) return;
+        item.dataset.state = "error";
+        result.textContent = controller.signal.aborted ? "请求超时" : shortModelTestError(error);
+      } finally {
+        clearTimeout(timer);
+        if (editor.modelTestAbort === controller) editor.modelTestAbort = null;
+      }
+    }
+
+    if (version === editor.modelTestVersion) {
+      modelTestProgress.textContent = `测试完成：${passed}/${models.length} 个模型正常。`;
+      detailTestModels.disabled = false;
+    }
+  }
+
+  function shortModelTestError(error) {
+    const message = String(error?.message || "请求失败").replace(/\s+/g, " ").trim();
+    return message.length > 100 ? `${message.slice(0, 97)}…` : message;
+  }
+
+  function closeModelTestDialog() {
+    editor.modelTestVersion += 1;
+    editor.modelTestAbort?.abort();
+    editor.modelTestAbort = null;
+    detailTestModels.disabled = false;
+    if (modelTestDialog) modelTestDialog.hidden = true;
+    form.inert = false;
+    document.querySelector(".settings-sidebar").inert = false;
+    detailTestModels?.focus();
+  }
+
   function extractModelIds(payload) {
     const list = payload && Array.isArray(payload.data)
       ? payload.data
@@ -823,6 +940,20 @@
       });
     }
     document.querySelector("#detail-add-model")?.addEventListener("click", addDetailModel);
+    detailTestModels?.addEventListener("click", testDetailModels);
+    document.querySelector("#close-model-test")?.addEventListener("click", closeModelTestDialog);
+    modelTestDialog?.addEventListener("click", (event) => {
+      if (closest(event.target, "[data-close='model-test']")) closeModelTestDialog();
+    });
+    modelTestDialog?.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeModelTestDialog();
+      } else if (event.key === "Tab") {
+        event.preventDefault();
+        document.querySelector("#close-model-test")?.focus();
+      }
+    });
     document.querySelector("#detail-models")?.addEventListener("input", updateDetailModel);
     document.querySelector("#detail-models")?.addEventListener("click", (event) => {
       const button = closest(event.target, '[data-action="remove-detail-model"]');

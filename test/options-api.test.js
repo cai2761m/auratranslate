@@ -281,6 +281,39 @@ test("detail model fetch merges ids, preserves aliases and updates model selecto
   assert.equal(storage.translationServices[0].models[0].displayName, "别名 A");
 });
 
+test("model test dialog checks each model and reports individual results", async (t) => {
+  const storage = serviceFixture();
+  storage.translationServices[0].models.push({ id: "model-b", displayName: "别名 B" });
+  const page = await openSettings(t, storage);
+  page.document.querySelector('[data-select-service="service-1"]').click();
+  const requests = [];
+  page.window.fetch = async (url, options) => {
+    const request = JSON.parse(options.body);
+    requests.push({ url, options, request });
+    if (request.model === "model-a") {
+      return { ok: true, json: async () => ({ choices: [{ message: { content: "OK" } }] }) };
+    }
+    return { ok: false, status: 404, json: async () => ({ error: { message: "model not found" } }) };
+  };
+
+  page.field("detail-test-models").click();
+  assert.equal(page.field("model-test-dialog").hidden, false);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests.map(({ request }) => request.model), ["model-a", "model-b"]);
+  assert.ok(requests.every(({ url }) => url === "https://a.example/v1/chat/completions"));
+  assert.ok(requests.every(({ options }) => options.headers.Authorization === "Bearer key-a"));
+  assert.deepEqual([...page.field("model-test-results").querySelectorAll(".model-test-result")]
+    .map((item) => item.dataset.state), ["success", "error"]);
+  assert.match(page.field("model-test-results").textContent, /model not found/);
+  assert.equal(page.field("model-test-progress").textContent, "测试完成：1/2 个模型正常。");
+
+  page.field("close-model-test").click();
+  assert.equal(page.field("model-test-dialog").hidden, true);
+  assert.equal(page.field("settings-form").inert, false);
+});
+
 test("late detail model responses cannot overwrite the newly selected service", async (t) => {
   const storage = serviceFixture();
   const page = await openSettings(t, storage);

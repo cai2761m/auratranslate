@@ -77,7 +77,7 @@
                     <label class="field"><span>API 协议</span><input id="detail-protocol" type="text" readonly></label>
                   </div>
                   <div id="detail-model-catalog" hidden>
-                    <div class="model-catalog-heading"><h4>模型列表 <span id="detail-model-count"></span></h4><div class="inline-actions"><button type="button" id="detail-add-model" class="ghost">添加模型</button><button type="button" id="detail-fetch-models" class="ghost">获取模型列表</button></div></div>
+                    <div class="model-catalog-heading"><h4>模型列表 <span id="detail-model-count"></span></h4><div class="inline-actions"><button type="button" id="detail-test-models" class="ghost">测试模型</button><button type="button" id="detail-add-model" class="ghost">添加模型</button><button type="button" id="detail-fetch-models" class="ghost">获取模型列表</button></div></div>
                     <ul class="detail-models" id="detail-models"></ul>
                     <p class="model-status" id="detail-model-status" role="status"></p>
                   </div>
@@ -260,6 +260,19 @@
                 <button type="button" id="save-service">保存</button>
               </div>
               <p class="dialog-save-hint">保存供应方后会立即应用更改。</p>
+            </div>
+          </div>
+
+          <div class="modal" id="model-test-dialog" role="dialog" aria-modal="true" aria-labelledby="model-test-title" hidden>
+            <div class="modal-backdrop" data-close="model-test"></div>
+            <div class="modal-panel">
+              <h2 id="model-test-title">测试模型</h2>
+              <p class="model-test-note">将依次向每个模型发送一条简短请求，可能产生少量 API 费用。</p>
+              <p id="model-test-progress" class="model-test-progress" role="status" aria-live="polite"></p>
+              <ul id="model-test-results" class="model-test-results"></ul>
+              <div class="modal-actions">
+                <button type="button" id="close-model-test" class="secondary">关闭</button>
+              </div>
             </div>
           </div>
         </div>
