@@ -53,40 +53,17 @@ test("fully consumed responses clear their deadline and preserve the body", asyn
   assert.equal(f.timers.size, 0);
 });
 
-test("an uncertain AI timeout switches to free Google exactly once without replaying AI", async () => {
-  const f = fixture(true);
-  const retained = [];
-  const result = f.context.translateImmersiveWithFallback({
-    translationConfig: Core.resolveTranslationConfig({ ...Core.DEFAULT_SETTINGS, deepseekApiKey: "fake-key" }),
-    sourceLanguage: "en", targetLanguage: "zh-CN", mode: "immersive",
-    cues: [{ id: "1", sourceText: "This is an English paragraph." }]
-  }, { immersiveFallbackProvider: "google-free" }, async (items) => retained.push(...items));
-  await new Promise((resolve) => setImmediate(resolve));
-  let googleCalls = 0;
-  f.context.fetch = async (url) => {
-    assert.match(url, /^https:\/\/translate.googleapis.com\//);
-    googleCalls++;
-    return { ok: true, text: async () => JSON.stringify([[["谷歌译文"]]]) };
-  };
-  [...f.timers.values()][0].callback();
-  assert.equal((await result)[0].translatedText, "谷歌译文");
-  assert.equal(retained.length, 1);
-  assert.equal(f.fetchCount, 1);
-  assert.equal(googleCalls, 1);
-  assert.equal(f.timers.size, 0);
-});
-
-test("Google fallback bounds stalled response bodies and never retries", async (t) => {
+test("Google translation bounds stalled response bodies and never retries", async (t) => {
   for (const mode of ["google-free"]) {
     await t.test(mode, async () => {
       const f = fixture(true);
-      const result = f.context.translateImmersiveWithFallback({
+      const result = f.context.translateImmersiveBuiltIn({
         translationConfig: Core.resolveTranslationConfig(Core.DEFAULT_SETTINGS),
         sourceLanguage: "en", targetLanguage: "zh-CN", mode: "immersive",
         cues: [{ id: "1", sourceText: "An English paragraph." }]
-      }, { immersiveFallbackProvider: mode }, async () => {});
+      }, mode, async () => {});
       const rejected = assert.rejects(result, (error) => {
-        assert.match(error.message, /Google 兜底失败.*超时/);
+        assert.match(error.message, /Google 翻译失败.*超时/);
         assert.equal(error.requestMayHaveReachedProvider, false);
         return true;
       });

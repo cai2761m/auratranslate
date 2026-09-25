@@ -82,11 +82,10 @@ test("hidden sub-pages keep their field values so one save still stores every pa
   const storage = {};
   const page = await openSettings(t, { storage });
   assert.equal(page.document.getElementById("immersive-api").hidden, true);
-  page.document.getElementById("immersiveFallbackProvider").value = "google-free";
   page.document.getElementById("targetLanguage").value = "zh-TW";
   page.document.querySelector("form").dispatchEvent(new page.window.Event("submit", { cancelable: true }));
   await Promise.resolve();
-  assert.equal(storage.immersiveFallbackProvider, "google-free", "hidden page still submits its field");
+  assert.equal(storage.immersiveFallbackProvider, undefined, "removed fallback setting stays cleared");
   assert.equal(storage.targetLanguage, "zh-TW");
 });
 

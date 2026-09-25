@@ -7,13 +7,12 @@ const Core = require("../src/shared.js");
 
 const root = path.resolve(__dirname, "..");
 
-test("removed Cloud fallback migrates to off and removes its saved key", async (t) => {
-  const storage = { immersiveFallbackProvider: "google-cloud", immersiveGoogleApiKey: "old-cloud-key" };
+test("removed webpage fallback setting and saved credentials are cleared", async (t) => {
+  const storage = { immersiveFallbackProvider: "bing-free", immersiveGoogleApiKey: "old-key" };
   const page = await openSettings(t, storage);
-  assert.equal(page.field("immersiveFallbackProvider").value, "off");
-  assert.equal(page.document.querySelector('option[value="google-cloud"]'), null);
+  assert.equal(page.field("immersiveFallbackProvider"), null);
   await page.save();
-  assert.equal(storage.immersiveFallbackProvider, "off");
+  assert.equal(storage.immersiveFallbackProvider, undefined);
   assert.equal(storage.immersiveGoogleApiKey, undefined);
 });
 
@@ -234,9 +233,6 @@ function serviceFixture() {
 test("custom services stay in their group when selected as defaults", async (t) => {
   const storage = serviceFixture();
   const page = await openSettings(t, storage);
-  const priority = page.field("priority-service-list");
-  assert.deepEqual([...priority.querySelectorAll("[data-select-service]")].map((el) => el.dataset.selectService),
-    ["builtin:google-free", "builtin:bing-free"]);
   assert.deepEqual([...page.field("custom-service-list").querySelectorAll("[data-select-service]")].map((el) => el.dataset.selectService),
     ["service-2", "service-1"]);
   assert.match(page.document.querySelector('[data-select-service="service-2"]').textContent, /默认/);
@@ -261,15 +257,10 @@ test("custom services stay in their group when selected as defaults", async (t) 
   assert.equal(page.document.querySelector('#custom-service-list [data-select-service="service-1"]').dataset.selectService, "service-1");
 });
 
-test("built-in fallback details do not expose editable credentials", async (t) => {
+test("service details stay hidden until a custom provider is selected", async (t) => {
   const storage = {};
   const page = await openSettings(t, storage);
-  assert.equal(page.field("detail-name").textContent, "谷歌翻译");
-  assert.equal(page.field("detail-api-key").disabled, true);
-  assert.equal(page.field("detail-base-url").readOnly, true);
-  assert.equal(page.field("detail-actions").hidden, true);
-  assert.equal(page.field("detail-fetch-models").hidden, true);
-  assert.equal(page.document.querySelector('[data-select-service="builtin:google-cloud"]'), null);
+  assert.equal(page.field("service-detail").hidden, true);
 });
 
 test("detail model fetch merges ids, preserves aliases and updates model selectors", async (t) => {

@@ -27,7 +27,6 @@
     immersiveTranslationBaseUrl: "",
     immersiveTranslationModel: "",
     immersiveTranslationJsonResponse: true,
-    immersiveFallbackProvider: "off",
     immersiveSourceLanguage: "auto",
     immersiveTargetLanguage: "",
     immersiveTranslationService: "ai",

@@ -155,10 +155,13 @@ function freeGoogleResponse(text = "谷歌译文") {
   return jsonResponse([[[text, "source", null, null]], null, "en"]);
 }
 
-test("Google fallback never runs on cache probes, successful AI requests or subtitle requests", async () => {
+test("legacy Google automatic fallback setting is ignored for AI and subtitle translations", async () => {
   const fixture = createFixture({ immersiveFallbackProvider: "google-free" });
   const urls = [];
-  fixture.hooks.fetch = (url) => { urls.push(url); };
+  fixture.hooks.fetch = (url) => {
+    urls.push(url);
+    return jsonResponse({ choices: [{ message: { content: JSON.stringify({ items: [{ id: "0", translatedText: "AI 译文" }] }) } }] });
+  };
   const worker = fixture.startWorker();
   assert.equal((await worker.request(immersiveMessage(["Paragraph"], { cacheOnly: true }))).items.length, 0);
   assert.equal(urls.length, 0);
@@ -168,8 +171,8 @@ test("Google fallback never runs on cache probes, successful AI requests or subt
   assert.ok(urls.every((url) => url === "https://api.example.com/v1/chat/completions"));
 });
 
-test("free Google covers missing config, caches across worker restarts and survives disabling fallback", async () => {
-  const fixture = createFixture({ translationApiKey: "", immersiveFallbackProvider: "google-free" });
+test("direct Google translation works without an AI key and reuses its cache", async () => {
+  const fixture = createFixture({ translationApiKey: "", immersiveTranslationService: "google-free" });
   fixture.hooks.fetch = (url, options) => {
     assert.match(url, /^https:\/\/translate.googleapis.com\/translate_a\/single\?/);
     assert.equal(new URL(url).searchParams.get("q"), "Paragraph");
@@ -183,51 +186,19 @@ test("free Google covers missing config, caches across worker restarts and survi
   assert.equal(first.items.length, 2);
   assert.equal(first.items[0].translatedText, "谷歌译文");
   assert.equal(fixture.fetchCount, 1);
-  fixture.storage.immersiveFallbackProvider = "off";
   const cached = await fixture.startWorker().request(immersiveMessage(["Paragraph"], { cacheOnly: true }));
   assert.equal(cached.items[0].translatedText, "谷歌译文");
   assert.equal(fixture.fetchCount, 1);
 });
 
-test("failed AI is tried once then Google fallback shares in-flight requests", async () => {
+test("failed AI is not retried through a saved Google automatic fallback", async () => {
   const fixture = createFixture({ immersiveFallbackProvider: "google-free" });
-  const started = deferred();
-  const release = deferred();
-  let aiCalls = 0;
-  let googleCalls = 0;
-  fixture.hooks.fetch = async (url) => {
-    if (url.includes("api.example.com")) { aiCalls++; return jsonResponse({ error: { message: "rate limited" } }, 429); }
-    googleCalls++;
-    started.resolve();
-    await release.promise;
-    return freeGoogleResponse();
-  };
-  const worker = fixture.startWorker();
-  const first = worker.request(immersiveMessage(["Paragraph"]));
-  await started.promise;
-  const second = worker.request(immersiveMessage(["Paragraph"]));
-  await new Promise((resolve) => setImmediate(resolve));
-  release.resolve();
-  assert.ok((await Promise.all([first, second])).every((response) => response.ok && response.items.length === 1));
-  assert.equal(aiCalls, 1);
-  assert.equal(googleCalls, 1);
-});
-
-test("Google only fills missing AI paragraphs and preserves primary results", async () => {
-  const fixture = createFixture({ immersiveFallbackProvider: "google-free" });
-  const googleTexts = [];
-  fixture.hooks.fetch = (url) => {
-    if (url.includes("api.example.com")) return jsonResponse({ choices: [{ message: { content: JSON.stringify({ items: [{ id: "0", translatedText: "AI 译文" }] }) } }] });
-    googleTexts.push(new URL(url).searchParams.get("q"));
-    return freeGoogleResponse();
-  };
-  const response = await fixture.startWorker().request(immersiveMessage(["First paragraph", "Second paragraph"]));
-  assert.equal(response.ok, true);
-  assert.deepEqual(googleTexts, ["Second paragraph"]);
-  assert.equal(response.items[0].translatedText, "AI 译文");
-  assert.equal(response.items[1].translatedText, "谷歌译文");
-  assert.equal((await fixture.startWorker().request(immersiveMessage(["First paragraph", "Second paragraph"], { cacheOnly: true }))).items.length, 2);
-  assert.equal(fixture.fetchCount, 2);
+  const urls = [];
+  fixture.hooks.fetch = (url) => { urls.push(url); return jsonResponse({ error: { message: "invalid API key" } }, 401); };
+  const result = await fixture.startWorker().request(immersiveMessage(["Paragraph"]));
+  assert.equal(result.ok, false);
+  assert.equal(urls.length, 1);
+  assert.ok(urls[0].includes("api.example.com"));
 });
 
 test("free Google translates the FittedBox paragraph in one request and preserves reordered markers", async () => {
@@ -331,7 +302,7 @@ test("Google rejects missing, duplicated, unknown or misnested markers without r
 });
 
 test("only obsolete formatted Google cache entries are replaced; AI and plain caches survive", async () => {
-  const fixture = createFixture({ translationApiKey: "", immersiveFallbackProvider: "google-free" });
+  const fixture = createFixture({ translationApiKey: "", immersiveTranslationService: "google-free" });
   const message = immersiveMessage([], { items: [
     { id: "im0", sourceText: "Use FittedBox inside Center.", formattedText: "Use [[YTBT_CODE_0]]FittedBox[[/YTBT_CODE_0]] inside [[YTBT_CODE_1]]Center[[/YTBT_CODE_1]]." },
     { id: "im1", sourceText: "An ordinary paragraph." },
@@ -385,7 +356,7 @@ test("long Google paragraphs split at sentence boundaries without breaking forma
 });
 
 test("Google rate limits cool down without retries and earlier successes remain cached", async () => {
-  const fixture = createFixture({ translationApiKey: "", immersiveFallbackProvider: "google-free" });
+  const fixture = createFixture({ translationApiKey: "", immersiveTranslationService: "google-free" });
   let calls = 0;
   fixture.hooks.fetch = () => ++calls === 1 ? freeGoogleResponse() : jsonResponse({}, 429);
   const worker = fixture.startWorker();
@@ -401,14 +372,14 @@ test("Google rate limits cool down without retries and earlier successes remain 
 });
 
 test("malformed Google responses surface errors without retrying", async () => {
-  const invalid = createFixture({ translationApiKey: "", immersiveFallbackProvider: "google-free" });
+  const invalid = createFixture({ translationApiKey: "", immersiveTranslationService: "google-free" });
   invalid.hooks.fetch = () => jsonResponse({ unexpected: true });
   assert.equal((await invalid.startWorker().request(immersiveMessage(["Paragraph"]))).ok, false);
   assert.equal(invalid.fetchCount, 1);
 });
 
 test("Google storage failures retain results in memory without another request", async () => {
-  const fixture = createFixture({ translationApiKey: "", immersiveFallbackProvider: "google-free" });
+  const fixture = createFixture({ translationApiKey: "", immersiveTranslationService: "google-free" });
   fixture.hooks.fetch = () => freeGoogleResponse("译文");
   fixture.hooks.setError = "Disk full";
   const worker = fixture.startWorker();
@@ -422,7 +393,7 @@ test("Google storage failures retain results in memory without another request",
 });
 
 test("free Google bounds long Unicode input and global concurrency", async () => {
-  const fixture = createFixture({ translationApiKey: "", immersiveFallbackProvider: "google-free" });
+  const fixture = createFixture({ translationApiKey: "", immersiveTranslationService: "google-free" });
   let active = 0;
   let peak = 0;
   fixture.hooks.fetch = async (url) => {

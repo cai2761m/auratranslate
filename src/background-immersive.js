@@ -1,4 +1,4 @@
-// Webpage translation identities, cache hydration, and fallback selection.
+// Webpage translation identities, cache hydration, and selected provider routing.
 // Classic scripts share the dedicated background scope; background.js loads them
 // synchronously in Chrome, and manifest.json supplies the same order in Firefox.
 async function handleImmersiveTranslate(message) {
@@ -9,8 +9,7 @@ async function handleImmersiveTranslate(message) {
   const service = preferences.immersiveTranslationService || "ai";
   const translationConfig = Core.resolveTranslationConfig(settings, "immersive");
   if (["google-free", "bing-free"].includes(service)) {
-    // A selected built-in service is primary, even when an AI service is configured.
-    settings.immersiveFallbackProvider = service;
+    // A selected built-in service translates directly, without an AI fallback.
     Object.assign(translationConfig, { provider: service, apiKey: "", model: "", chatCompletionsUrl: "", generateContentUrl: "" });
   }
 
@@ -72,9 +71,8 @@ async function handleImmersiveTranslate(message) {
   }
 
   if (message.cacheOnly !== true && missing.length) {
-    const fallbackProvider = ["google-free", "bing-free"].includes(settings.immersiveFallbackProvider)
-      ? settings.immersiveFallbackProvider : "off";
-    if (fallbackProvider === "off" && (!translationConfig.apiKey || !endpointUrl || !translationConfig.model)) {
+    const builtInProvider = ["google-free", "bing-free"].includes(service) ? service : "off";
+    if (builtInProvider === "off" && (!translationConfig.apiKey || !endpointUrl || !translationConfig.model)) {
       throw new Error(`${translationConfig.providerLabel} ${!translationConfig.apiKey ? "API Key" : "base URL or model"} is not configured.`);
     }
     const translatedItems = await translateMissingCues({
@@ -82,8 +80,8 @@ async function handleImmersiveTranslate(message) {
       asrCorrectionEnabled: false,
       cues: missing,
       mode: "immersive",
-      translateCues: fallbackProvider === "off" ? undefined : (request, retain) =>
-        translateImmersiveWithFallback(request, settings, retain),
+      translateCues: builtInProvider === "off" ? undefined : (request, retain) =>
+        translateImmersiveBuiltIn(request, builtInProvider, retain),
       async persistItems(items) {
         const newItems = {};
         for (const item of items) {
@@ -132,41 +130,27 @@ function usableImmersiveCache(entry, sourceText, hasFormatting) {
   return true;
 }
 
-// Fallback is opt-in and belongs inside in-flight deduplication. Storage errors
-// must never be mistaken for provider failures and trigger another paid call.
-async function translateImmersiveWithFallback(request, settings, retain) {
+// A keyless provider is called only when selected directly in the popup.
+async function translateImmersiveBuiltIn(request, provider, retain) {
   let items = [];
-  let primaryError;
-  const config = request.translationConfig;
-  const endpoint = config.apiStyle === "gemini" ? config.generateContentUrl : config.chatCompletionsUrl;
-  if (config.apiKey && endpoint && config.model) {
-    try {
-      // Switch provider after one attempt; do not replay the original AI call.
-      items = await translateBatch(request);
-    } catch (error) {
-      primaryError = error;
-    }
-  }
-  const translatedIds = new Set(items.map((item) => String(item.id)));
-  const missing = request.cues.filter((cue) => !translatedIds.has(String(cue.id)));
-  if (!missing.length) return items;
-  if (items.length) await retain(items);
   const deadline = Date.now() + 45000;
-  for (const cue of missing) {
+  for (const cue of request.cues) {
     let translatedText;
     try {
-      translatedText = await translateGoogleCue(cue.sourceText, request, settings, deadline, cue.hasFormatting);
+      translatedText = provider === "bing-free"
+        ? await translateBingCue(cue.sourceText, request, deadline, cue.hasFormatting)
+        : await translateGoogleCue(cue.sourceText, request, deadline, cue.hasFormatting);
     } catch (error) {
       // Earlier successes are already cached. Return them so the page can render
       // partial progress; a subsequent click only requests missing paragraphs.
       if (items.length) return items;
-      const providerLabel = settings.immersiveFallbackProvider === "bing-free" ? "Bing" : "Google";
-      const failure = new Error(`${primaryError ? `主接口失败：${primaryError.message}；` : ""}${providerLabel} 兜底失败：${error.message}`);
-      failure.requestMayHaveReachedProvider = Boolean(primaryError?.requestMayHaveReachedProvider || error.requestMayHaveReachedProvider);
+      const providerLabel = provider === "bing-free" ? "Bing" : "Google";
+      const failure = new Error(`${providerLabel} 翻译失败：${error.message}`);
+      failure.requestMayHaveReachedProvider = Boolean(error.requestMayHaveReachedProvider);
       throw failure;
     }
-    const bing = settings.immersiveFallbackProvider === "bing-free";
-    const item = { id: cue.id, translatedText, translationProvider: settings.immersiveFallbackProvider,
+    const bing = provider === "bing-free";
+    const item = { id: cue.id, translatedText, translationProvider: provider,
       ...(bing ? { bingTranslationVersion: 1 } : { googleTranslationVersion: 2 }) };
     await retain([item]);
     items.push(item);

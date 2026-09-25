@@ -41,12 +41,9 @@
     if (settings.immersiveTranslationService === "google-cloud") {
       settings.immersiveTranslationService = migratedSettings.immersiveTranslationService = "ai";
     }
-    if (settings.immersiveFallbackProvider === "google-cloud") {
-      settings.immersiveFallbackProvider = migratedSettings.immersiveFallbackProvider = "off";
-    }
     if (Object.keys(migratedSettings).length) {
       await api((done) => chrome.storage.local.set(migratedSettings, done));
-      await api((done) => chrome.storage.local.remove("immersiveGoogleApiKey", done));
+      await api((done) => chrome.storage.local.remove(["immersiveFallbackProvider", "immersiveGoogleApiKey"], done));
     }
     $("#source-language").value = settings.immersiveSourceLanguage;
     $("#target-language").value = settings.immersiveTargetLanguage || settings.targetLanguage;

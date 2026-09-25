@@ -86,10 +86,7 @@ async function withGoogleSlot(work) {
   }
 }
 
-async function translateGoogleCue(text, request, settings, deadline, hasFormatting = false) {
-  if (settings.immersiveFallbackProvider === "bing-free") {
-    return translateBingCue(text, request, deadline, hasFormatting);
-  }
+async function translateGoogleCue(text, request, deadline, hasFormatting = false) {
   if (hasFormatting) restoreGoogleFormatting(text, text);
   const parts = googleParagraphChunks(text, hasFormatting).map((part) => {
     const [, before, content, after] = part.match(/^(\s*)([\s\S]*?)(\s*)$/);

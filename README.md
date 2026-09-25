@@ -54,7 +54,7 @@ Add providers on the **翻译服务** page first: click **添加自定义供应�
 
 For example, `https://api.example.com/v1` becomes `https://api.example.com/v1/chat/completions` and **获取可用模型** requests `https://api.example.com/v1/models`. This is a placeholder: replace it with your provider's actual endpoint. Do not enter a website homepage or a native API endpoint with a different protocol.
 
-A provider can hold several models, and you can add several providers; **编辑** (Edit) and **删除** (Delete) on each card change them at any time. **其他翻译服务** (Other services) lists the built-in **谷歌翻译** (Google Translate) keyless endpoint, which is only used as the webpage fallback configured on the **沉浸式翻译** page.
+A provider can hold several models, and you can add several providers; **编辑** (Edit) and **删除** (Delete) on each card change them at any time. Google Translate remains available as a direct choice in the webpage popup.
 
 The **实时字幕** and **沉浸式翻译** pages then only pick from that list — no address or key fields:
 
@@ -63,16 +63,11 @@ The **实时字幕** and **沉浸式翻译** pages then only pick from that list
 
 Settings saved by older versions are migrated automatically: opening the settings page turns the single legacy API configuration into one provider entry without losing the key, address or model.
 
-The **Google 翻译兜底** (Google fallback) selector is off by default. It provides two optional, keyless fallbacks for webpages:
-
-- **Google 翻译（免 Key，可能限流）** uses an unofficial, keyless endpoint without Cloud API billing. It may be rate limited, blocked by your network, changed, or withdrawn; availability is not guaranteed.
-- **Bing 翻译（免 Key，可能限流）** uses a public webpage endpoint without a key. It may be limited or unavailable.
-
-With fallback enabled, cached translations load first. If the primary API is unconfigured, fails, or omits paragraphs, only missing text is sent to the selected service. The primary API gets one attempt per batch before fallback; a timed-out primary request may already have been billed. Fallback requests are not automatically retried. Successful paragraphs are cached even if later paragraphs fail; changing or disabling fallback keeps existing cached translations.
+Webpage translation uses the selected provider directly. Google Translate is a keyless option and may be rate limited, blocked by your network, changed, or withdrawn; availability is not guaranteed. If translation fails, completed paragraphs remain visible and are cached for later use.
 
 Google translates complete paragraphs with inline formatting markers, so code, links, and emphasis do not split a sentence into separate translation requests. The extension validates the returned markers, restores code identifiers exactly, and rebuilds the original formatting locally in the translated word order. Missing or damaged markers produce an error instead of a broken cached translation; no automatic retry is made. Oversized paragraphs are split outside formatting, preferably at sentence boundaries, with a 4,000-code-point request limit. A single formatting region exceeding that limit requires AI translation.
 
-After upgrading, obsolete Google translations of formatted paragraphs are skipped during cache hydration and replaced on the next translation run. AI translations and ordinary plain-text caches remain reusable; no full cache clearing is needed. Replacement requests use the selected service and its usual billing rules. Google concurrency remains limited to two requests, each with a 15-second deadline and a 45-second fallback budget checked before sending. The keyless endpoint cools down for 60 seconds after a request failure while the background worker remains active. If both services fail, completed paragraphs stay visible and the remaining work pauses. Subtitle translation is unaffected.
+After upgrading, obsolete Google translations of formatted paragraphs are skipped during cache hydration and replaced on the next translation run. AI translations and ordinary plain-text caches remain reusable; no full cache clearing is needed. Google requests are limited to two concurrent requests and a 15-second deadline. The keyless endpoint cools down for 60 seconds after a request failure while the background worker remains active. Subtitle translation is unaffected.
 
 Click **保存设置** (Save settings). The extension does not include an API key; API usage is billed according to your provider's terms.
 
@@ -108,7 +103,7 @@ On smaller screens, try `0.50×–0.65×` and save. Font-size changes do not req
 Successful subtitle translations, prepared caption windows, and webpage translations are stored in `chrome.storage.local`.
 
 - Visible webpage text uses small batches (up to 4 blocks and a target of 1,800 source characters, including formatting markers), separate from offscreen text. A longer individual paragraph stays intact. Offscreen batches remain larger, with at most three concurrent page requests; scrolling reprioritizes the next available slot. Smaller visible batches can add per-request prompt overhead.
-- Cache checks display completed paragraphs even while the rest of their batch is still translating, including results from Google fallback.
+- Cache checks display completed paragraphs even while the rest of their batch is still translating, including results from Google translation.
 - Refreshing a page reuses matching saved results and requests missing text. Fully cached content does not need another translation request.
 - Changing the model, endpoint, language, or relevant subtitle processing settings can require new translations. Switching subtitle scope or lookahead preserves cached progress.
 - Seeking or disabling subtitles adjusts work that has not yet been sent. Already-sent requests may finish and incur charges.
@@ -142,7 +137,7 @@ An installed signed extension needs an updated signed package. Pulling GitHub ch
 
 Translation sends selected caption or webpage text to the API endpoint you configure. LLM sentence segmentation also sends caption text to that endpoint. API keys are stored in browser extension local storage; the project does not add encryption for stored keys. The password input masks the key on screen only.
 
-Enabling a keyless fallback allows missing webpage text to be sent to the selected provider's public translation endpoint. Fallback requests omit browser cookies.
+Selecting Google Translate sends webpage text to its public translation endpoint. The request omits browser cookies.
 
 The current source does not include a separate AuraTranslate account service or analytics endpoint. Your API provider handles the text you send under its own data policies.
 
@@ -180,7 +175,7 @@ src/
   background.js     Background entry point and message routing
   background-core.js        Shared request state and storage helpers
   background-subtitles.js   Subtitle translation and segmentation handlers
-  background-immersive.js   Webpage cache identity and fallback selection
+  background-immersive.js   Webpage cache identity and provider routing
   background-google.js      Google translation and formatting validation
   background-requests.js    Request deduplication, provider calls, and timeouts
   background-cache.js       Serialized cache writes and eviction

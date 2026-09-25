@@ -13,7 +13,6 @@
   const immersiveModelSelect = document.querySelector("#immersiveTranslationModelId");
   const immersiveModelHint = document.querySelector("#immersiveTranslationModelHint");
   const immersiveTranslationJsonResponse = document.querySelector("#immersiveTranslationJsonResponse");
-  const immersiveFallbackProvider = document.querySelector("#immersiveFallbackProvider");
   const llmSentenceSegmentationEnabled = document.querySelector("#llmSentenceSegmentationEnabled");
   const asrCorrectionEnabled = document.querySelector("#asrCorrectionEnabled");
   const showOriginalTechnicalTerms = document.querySelector("#showOriginalTechnicalTerms");
@@ -28,13 +27,10 @@
   const clearCache = document.querySelector("#clear-cache");
   const serviceList = document.querySelector("#custom-service-list");
   const serviceEmpty = document.querySelector("#custom-service-empty");
-  const priorityServiceList = document.querySelector("#priority-service-list");
   const detail = document.querySelector("#service-detail");
   const detailApiKey = document.querySelector("#detail-api-key");
   const detailBaseUrl = document.querySelector("#detail-base-url");
   const detailFetchModels = document.querySelector("#detail-fetch-models");
-  const BUILTIN_FREE = "builtin:google-free";
-  const BUILTIN_BING = "builtin:bing-free";
   const dialog = document.querySelector("#service-dialog");
   const dialogTitle = document.querySelector("#service-dialog-title");
   const serviceName = document.querySelector("#service-name");
@@ -87,12 +83,7 @@
 
     const settings = await storageGet(Core.DEFAULT_SETTINGS);
     hydrateTranslationServices(settings);
-
-    if (immersiveFallbackProvider) {
-      immersiveFallbackProvider.value = settings.immersiveFallbackProvider === "google-cloud"
-        ? "off" : settings.immersiveFallbackProvider || "off";
-      immersiveFallbackProvider.addEventListener("change", renderServiceList);
-    }
+    await storageRemove(["immersiveFallbackProvider", "immersiveGoogleApiKey"]);
 
     if (llmSentenceSegmentationEnabled) {
       llmSentenceSegmentationEnabled.checked = settings.llmSentenceSegmentationEnabled !== false;
@@ -259,14 +250,13 @@
       return;
     }
 
-    if (!serviceById(editor.selectedServiceId) && ![BUILTIN_FREE, BUILTIN_BING].includes(editor.selectedServiceId)) {
-      editor.selectedServiceId = editor.translationServiceId || BUILTIN_FREE;
+    if (!serviceById(editor.selectedServiceId)) {
+      editor.selectedServiceId = editor.translationServiceId || editor.services[0]?.id || "";
     }
     const scroll = document.querySelector(".services-scroll");
     const scrollTop = scroll.scrollTop;
     const focusedId = document.activeElement?.dataset.selectService;
     serviceList.textContent = "";
-    priorityServiceList.textContent = "";
     let otherCount = 0;
     for (const service of editor.services) {
       const labels = [];
@@ -275,9 +265,6 @@
       serviceList.appendChild(buildServiceEntry(service.id, service.name || "未命名供应方", labels.join(" · ") || `${service.models.length} 个模型`));
       otherCount += 1;
     }
-    const fallback = immersiveFallbackProvider.value;
-    priorityServiceList.appendChild(buildServiceEntry(BUILTIN_FREE, "谷歌翻译", fallback === "google-free" ? "兜底 · 已启用" : "兜底 · 免 Key"));
-    priorityServiceList.appendChild(buildServiceEntry(BUILTIN_BING, "Bing 翻译", fallback === "bing-free" ? "兜底 · 已启用" : "兜底 · 免 Key"));
     if (serviceEmpty) {
       serviceEmpty.hidden = otherCount > 0;
     }
@@ -307,19 +294,17 @@
 
   function renderServiceDetail() {
     const service = serviceById(editor.selectedServiceId);
-    const bing = editor.selectedServiceId === BUILTIN_BING;
+    detail.hidden = !service;
     if (detail.dataset.serviceId !== editor.selectedServiceId) detail.scrollTop = 0;
     detail.dataset.serviceId = editor.selectedServiceId;
-    document.querySelector("#detail-name").textContent = service ? service.name || "未命名供应方" : bing ? "Bing 翻译" : "谷歌翻译";
-    document.querySelector("#detail-kind").textContent = service ? "自定义供应方" : "内置兜底服务";
+    document.querySelector("#detail-name").textContent = service ? service.name || "未命名供应方" : "";
+    document.querySelector("#detail-kind").textContent = service ? "自定义供应方" : "";
     document.querySelector("#detail-actions").hidden = !service;
     document.querySelector("#detail-connection").hidden = !service;
     document.querySelector("#detail-model-catalog").hidden = !service;
     document.querySelector("#detail-description").textContent = service
       ? "在此修改密钥和 API 地址；点击编辑维护名称与模型目录。"
-      : bing
-          ? "使用 Bing 网页翻译免 Key 接口作为网页翻译兜底。接口非官方，可能限流或失效。"
-          : "使用 Google 网页翻译免 Key 接口作为网页翻译兜底。接口非官方，可能限流或失效。";
+      : "";
     detailApiKey.value = service ? service.apiKey : "";
     detailBaseUrl.value = service ? service.baseUrl : "";
     document.querySelector("#detail-protocol").value = service ? service.apiProtocol : "";
@@ -828,7 +813,7 @@
     if (addService) {
       addService.addEventListener("click", () => openServiceDialog(""));
     }
-    for (const list of [serviceList, priorityServiceList]) {
+    for (const list of [serviceList]) {
       if (!list) continue;
       list.addEventListener("click", (event) => {
         const button = closest(event.target, "[data-select-service]");
@@ -990,7 +975,6 @@
       immersiveTranslationBaseUrl: dedicatedImmersive ? immersiveService.baseUrl : "",
       immersiveTranslationModel: dedicatedImmersive ? immersiveModelId : "",
       immersiveTranslationJsonResponse: dedicatedImmersive ? readChecked(immersiveTranslationJsonResponse, true) : true,
-      immersiveFallbackProvider: readValue(immersiveFallbackProvider, "off"),
       llmSentenceSegmentationEnabled: readChecked(llmSentenceSegmentationEnabled, true),
       asrCorrectionEnabled: readChecked(asrCorrectionEnabled, true),
       showOriginalTechnicalTerms: readChecked(showOriginalTechnicalTerms, true),
@@ -1004,7 +988,7 @@
     saveQueue = saveQueue.catch(() => {}).then(async () => {
       await storageSet(values);
       await storageRemove("deepseekApiKey");
-      await storageRemove("immersiveGoogleApiKey");
+      await storageRemove(["immersiveFallbackProvider", "immersiveGoogleApiKey"]);
       showStatus("设置已自动保存。");
     }).catch(() => showStatus("保存失败，请检查扩展存储空间后重试。"));
     return saveQueue;
