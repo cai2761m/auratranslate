@@ -1,6 +1,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { JSDOM } = require("jsdom");
+const fs = require("node:fs");
+const path = require("node:path");
 
 const sharedScript = require("../scripts/extension-scripts.cjs").source("shared");
 const immersiveScript = require("../scripts/extension-scripts.cjs").source("immersive");
@@ -74,6 +76,24 @@ test("Flutter callout titles and list items translate once without icon ligature
   assert.equal(document.querySelectorAll("[aria-hidden] [data-ytbt-immersive-translation], code [data-ytbt-immersive-translation]").length, 0);
 });
 
+test("Flutter pathway dropdown ancestors never become translated body blocks", async (t) => {
+  const fixture = fs.readFileSync(path.join(__dirname, "fixtures/flutter-pathway-navigation.html"), "utf8");
+  for (const expanded of [false, true]) {
+    await t.test(expanded ? "open dropdown" : "closed dropdown", async (t) => {
+      const html = expanded ? fixture.replace('data-expanded="false"', 'data-expanded="true"')
+        : fixture.replace('id="pagenav-content"', 'id="pagenav-content" style="display: none"');
+      const { document, texts, requests } = await translatePage(t, html);
+      assert.deepEqual(texts, ["Flutter learning pathway",
+        "This learning pathway walks you through the basics of both Dart and Flutter."]);
+      assert.equal(document.querySelector("#site-subheader [data-ytbt-immersive-translation]"), null);
+      assert.equal(document.querySelector("#site-subheader[data-ytbt-immersive-source]"), null);
+      assert.ok(requests.every((request) => request.items.every((item) =>
+        !/Quick install|ChangeNotifier|ListenableBuilder/.test(item.formattedText || item.sourceText))));
+      assert.equal(document.querySelectorAll("article [data-ytbt-state='done']").length, 2);
+    });
+  }
+});
+
 test("Flutter outline outside main translates short links and retains anchors", async (t) => {
   const { document, texts, requests } = await translatePage(t, `
     <aside id="side-menu"><nav id="toc-side">
@@ -98,6 +118,22 @@ test("Flutter outline outside main translates short links and retains anchors", 
   document.querySelector(".ytbt-immersive-tab").click();
   assert.ok(!document.documentElement.classList.contains("ytbt-immersive-hidden"));
   assert.equal(requests.length, requestCount);
+});
+
+test("UI wrappers cannot bypass exclusion through title or leaf heuristics", async (t) => {
+  const { document, texts } = await translatePage(t, `<main>
+    <div class="content"><section><div class="page-title"><div>
+      <button>Open all available documentation sections</button>
+      <div class="dropdown-content" hidden><a href="/settings">Manage all application settings here</a></div>
+    </div></div></section>
+    <h2 class="control-heading"><span role="button">Show all available navigation entries</span></h2>
+    <section class="nav-wrapper"><nav><a href="/menu">Navigate through the entire documentation website</a></nav></section>
+    <article><h1>Read the application guide</h1>
+      <p>Use <code>readAsString()</code> to read <em>the entire file</em> from this <a href="/guide">detailed guide</a>.</p>
+    </article></div></main>`);
+  assert.deepEqual(texts, ["Read the application guide", "Use readAsString() to read the entire file from this detailed guide."]);
+  assert.equal(document.querySelector(".page-title [data-ytbt-immersive-translation], .control-heading [data-ytbt-immersive-translation], .nav-wrapper [data-ytbt-immersive-translation]"), null);
+  assert.equal(document.querySelectorAll("article [data-ytbt-state='done']").length, 2);
 });
 
 test("callout and outline exceptions preserve excluded navigation and controls", async (t) => {

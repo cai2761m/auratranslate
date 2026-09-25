@@ -103,14 +103,7 @@
     "figcaption",
     "dd"
   ].join(",");
-  const SKIP_SELECTOR = [
-    "script",
-    "style",
-    "noscript",
-    "svg",
-    "canvas",
-    "pre",
-    "code",
+  const UI_SELECTOR = [
     "button",
     "input",
     "textarea",
@@ -123,7 +116,17 @@
     "[role='button']",
     "[role='tab']",
     "[role='tablist']",
-    ".dropdown-content",
+    ".dropdown-content"
+  ].join(",");
+  const SKIP_SELECTOR = [
+    "script",
+    "style",
+    "noscript",
+    "svg",
+    "canvas",
+    "pre",
+    "code",
+    UI_SELECTOR,
     "[contenteditable='true']",
     "[translate='no']",
     "[aria-hidden='true']",
@@ -352,6 +355,14 @@
   function isUsableBlock(element) {
     if (!element || isExcludedFromTranslation(element)) {
       return false;
+    }
+    // Skipping a menu's children is not enough: its visible wrapper can look
+    // like a leaf block, and textContent still includes the entire hidden menu.
+    // Reject that wrapper before either plain or formatted text is extracted.
+    // Inline code is intentionally not a UI boundary; callouts/TOCs retain
+    // their semantic exceptions through isExcludedFromTranslation.
+    for (const descendant of element.querySelectorAll(`${UI_SELECTOR}, nav, aside, [role='navigation']`)) {
+      if (isExcludedFromTranslation(descendant)) return false;
     }
     if (element.closest("[data-ytbt-immersive-source]")) {
       return false;
