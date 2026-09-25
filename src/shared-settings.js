@@ -28,7 +28,6 @@
     immersiveTranslationModel: "",
     immersiveTranslationJsonResponse: true,
     immersiveFallbackProvider: "off",
-    immersiveGoogleApiKey: "",
     immersiveSourceLanguage: "auto",
     immersiveTargetLanguage: "",
     immersiveTranslationService: "ai",

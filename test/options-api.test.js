@@ -7,25 +7,14 @@ const Core = require("../src/shared.js");
 
 const root = path.resolve(__dirname, "..");
 
-test("Google fallback is opt-in and both modes preserve their independent Cloud key", async (t) => {
-  const storage = {};
+test("removed Cloud fallback migrates to off and removes its saved key", async (t) => {
+  const storage = { immersiveFallbackProvider: "google-cloud", immersiveGoogleApiKey: "old-cloud-key" };
   const page = await openSettings(t, storage);
   assert.equal(page.field("immersiveFallbackProvider").value, "off");
-  assert.equal(page.field("immersiveGoogleApiKey").closest("label").hidden, true);
-  page.field("immersiveFallbackProvider").value = "google-cloud";
-  const selector = page.field("immersiveFallbackProvider");
-  selector.dispatchEvent(new selector.ownerDocument.defaultView.Event("change"));
-  assert.equal(page.field("immersiveGoogleApiKey").closest("label").hidden, false);
-  page.field("immersiveGoogleApiKey").value = " cloud-test-key ";
+  assert.equal(page.document.querySelector('option[value="google-cloud"]'), null);
   await page.save();
-  assert.equal(storage.immersiveFallbackProvider, "google-cloud");
-  assert.equal(storage.immersiveGoogleApiKey, "cloud-test-key");
-  const reopened = await openSettings(t, storage);
-  assert.equal(reopened.field("immersiveFallbackProvider").value, "google-cloud");
-  reopened.field("immersiveFallbackProvider").value = "google-free";
-  await reopened.save();
-  assert.equal(storage.immersiveFallbackProvider, "google-free");
-  assert.equal(storage.immersiveGoogleApiKey, "cloud-test-key");
+  assert.equal(storage.immersiveFallbackProvider, "off");
+  assert.equal(storage.immersiveGoogleApiKey, undefined);
 });
 
 test("legacy DeepSeek credentials become an editable service and keep translating", async (t) => {
@@ -247,7 +236,7 @@ test("default and fallback services are grouped first, selection only changes th
   const page = await openSettings(t, storage);
   const priority = page.field("priority-service-list");
   assert.deepEqual([...priority.querySelectorAll("[data-select-service]")].map((el) => el.dataset.selectService),
-    ["service-2", "builtin:google-free", "builtin:google-cloud"]);
+    ["service-2", "builtin:google-free", "builtin:bing-free"]);
   assert.equal(page.field("custom-service-list").children.length, 1);
   assert.equal(page.field("detail-name").textContent, "默认服务");
   page.document.querySelector('[data-select-service="service-1"]').click();
@@ -270,7 +259,7 @@ test("default and fallback services are grouped first, selection only changes th
   assert.equal(priority.firstElementChild.dataset.selectService, "service-1");
 });
 
-test("builtin details expose Cloud credentials without enabling fallback or editing endpoints", async (t) => {
+test("built-in fallback details do not expose editable credentials", async (t) => {
   const storage = {};
   const page = await openSettings(t, storage);
   assert.equal(page.field("detail-name").textContent, "谷歌翻译");
@@ -278,12 +267,7 @@ test("builtin details expose Cloud credentials without enabling fallback or edit
   assert.equal(page.field("detail-base-url").readOnly, true);
   assert.equal(page.field("detail-actions").hidden, true);
   assert.equal(page.field("detail-fetch-models").hidden, true);
-  page.document.querySelector('[data-select-service="builtin:google-cloud"]').click();
-  page.field("detail-api-key").value = "cloud-key";
-  page.field("detail-api-key").dispatchEvent(new page.window.Event("input"));
-  await page.save();
-  assert.equal(storage.immersiveGoogleApiKey, "cloud-key");
-  assert.equal(storage.immersiveFallbackProvider, "off");
+  assert.equal(page.document.querySelector('[data-select-service="builtin:google-cloud"]'), null);
 });
 
 test("detail model fetch merges ids, preserves aliases and updates model selectors", async (t) => {

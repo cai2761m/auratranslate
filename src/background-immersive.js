@@ -8,7 +8,7 @@ async function handleImmersiveTranslate(message) {
   const sourceLanguage = preferences.immersiveSourceLanguage || "auto";
   const service = preferences.immersiveTranslationService || "ai";
   const translationConfig = Core.resolveTranslationConfig(settings, "immersive");
-  if (["google-free", "google-cloud", "bing-free"].includes(service)) {
+  if (["google-free", "bing-free"].includes(service)) {
     // A selected built-in service is primary, even when an AI service is configured.
     settings.immersiveFallbackProvider = service;
     Object.assign(translationConfig, { provider: service, apiKey: "", model: "", chatCompletionsUrl: "", generateContentUrl: "" });
@@ -72,7 +72,7 @@ async function handleImmersiveTranslate(message) {
   }
 
   if (message.cacheOnly !== true && missing.length) {
-    const fallbackProvider = ["google-free", "google-cloud", "bing-free"].includes(settings.immersiveFallbackProvider)
+    const fallbackProvider = ["google-free", "bing-free"].includes(settings.immersiveFallbackProvider)
       ? settings.immersiveFallbackProvider : "off";
     if (fallbackProvider === "off" && (!translationConfig.apiKey || !endpointUrl || !translationConfig.model)) {
       throw new Error(`${translationConfig.providerLabel} ${!translationConfig.apiKey ? "API Key" : "base URL or model"} is not configured.`);
@@ -127,7 +127,7 @@ function usableImmersiveCache(entry, sourceText, hasFormatting) {
   // Only obsolete free-translation formatting results need replacing. Preserve AI and
   // plain-text caches, and never initiate a request during cache-only probes.
   if (!hasFormatting) return true;
-  if (["google-free", "google-cloud"].includes(entry.translationProvider)) return entry.googleTranslationVersion === 2;
+  if (entry.translationProvider === "google-free") return entry.googleTranslationVersion === 2;
   if (entry.translationProvider === "bing-free") return entry.bingTranslationVersion === 1;
   return true;
 }

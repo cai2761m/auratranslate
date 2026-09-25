@@ -230,28 +230,6 @@ test("Google only fills missing AI paragraphs and preserves primary results", as
   assert.equal(fixture.fetchCount, 2);
 });
 
-test("official Google sends a whole paragraph with a separate key and restores code exactly", async () => {
-  const fixture = createFixture({ translationApiKey: "", immersiveFallbackProvider: "google-cloud", immersiveGoogleApiKey: "cloud-key", sourceLanguage: "auto", targetLanguage: "zh-TW" });
-  const formattedText = 'Read [[YTBT_A_0]]the guide[[/YTBT_A_0]] and [[YTBT_CODE_1]]foo<T>()[[/YTBT_CODE_1]].';
-  fixture.hooks.fetch = (url, options) => {
-    assert.equal(url, "https://translation.googleapis.com/language/translate/v2");
-    assert.equal(options.headers["X-goog-api-key"], "cloud-key");
-    assert.equal(options.headers.Authorization, undefined);
-    const body = JSON.parse(options.body);
-    assert.equal(body.source, undefined);
-    assert.equal(body.target, "zh-TW");
-    assert.equal(body.format, "text");
-    assert.equal(body.model, "nmt");
-    assert.deepEqual(body.q, [formattedText]);
-    return jsonResponse({ data: { translations: [{ translatedText: "閱讀 [[YTBT_A_0]]指南 &amp; &#39; &lt;b&gt;[[/YTBT_A_0]]和 [[YTBT_CODE_1]]被錯誤翻譯的代碼[[/YTBT_CODE_1]]。" }] } });
-  };
-  const result = await fixture.startWorker().request(immersiveMessage([], { items: [{ id: "im0", sourceText: "Read the guide and foo<T>().", formattedText }] }));
-  assert.equal(result.ok, true);
-  assert.match(result.items[0].translatedText, /\[\[YTBT_CODE_1\]\]foo<T>\(\)\[\[\/YTBT_CODE_1\]\]/);
-  assert.match(result.items[0].translatedText, /\[\[YTBT_A_0\]\]指南 & ' <b>\[\[\/YTBT_A_0\]\]/);
-  assert.equal(fixture.fetchCount, 1);
-});
-
 test("free Google translates the FittedBox paragraph in one request and preserves reordered markers", async () => {
   const fixture = createFixture({ immersiveTranslationService: "google-free" });
   const formattedText = "But what happens if you put the [[YTBT_CODE_0]]FittedBox[[/YTBT_CODE_0]] inside of a [[YTBT_CODE_1]]Center[[/YTBT_CODE_1]] widget? The [[YTBT_CODE_2]]Center[[/YTBT_CODE_2]] lets the [[YTBT_CODE_3]]FittedBox[[/YTBT_CODE_3]] be any size it wants, up to the screen size.";
@@ -422,21 +400,16 @@ test("Google rate limits cool down without retries and earlier successes remain 
   assert.equal(calls, 2);
 });
 
-test("Cloud config and malformed Google responses surface errors without retrying", async () => {
-  const missing = createFixture({ translationApiKey: "", immersiveFallbackProvider: "google-cloud" });
-  const response = await missing.startWorker().request(immersiveMessage(["Paragraph"]));
-  assert.equal(response.ok, false);
-  assert.match(response.errors[0].message, /Google Cloud Translation API Key/);
-  assert.equal(missing.fetchCount, 0);
+test("malformed Google responses surface errors without retrying", async () => {
   const invalid = createFixture({ translationApiKey: "", immersiveFallbackProvider: "google-free" });
   invalid.hooks.fetch = () => jsonResponse({ unexpected: true });
   assert.equal((await invalid.startWorker().request(immersiveMessage(["Paragraph"]))).ok, false);
   assert.equal(invalid.fetchCount, 1);
 });
 
-test("Google storage failures retain results in memory and do not cause more paid requests", async () => {
-  const fixture = createFixture({ translationApiKey: "", immersiveFallbackProvider: "google-cloud", immersiveGoogleApiKey: "cloud-key" });
-  fixture.hooks.fetch = () => jsonResponse({ data: { translations: [{ translatedText: "译文" }] } });
+test("Google storage failures retain results in memory without another request", async () => {
+  const fixture = createFixture({ translationApiKey: "", immersiveFallbackProvider: "google-free" });
+  fixture.hooks.fetch = () => freeGoogleResponse("译文");
   fixture.hooks.setError = "Disk full";
   const worker = fixture.startWorker();
   assert.equal((await worker.request(immersiveMessage(["Paragraph"]))).ok, false);

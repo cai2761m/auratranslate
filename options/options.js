@@ -14,7 +14,6 @@
   const immersiveModelHint = document.querySelector("#immersiveTranslationModelHint");
   const immersiveTranslationJsonResponse = document.querySelector("#immersiveTranslationJsonResponse");
   const immersiveFallbackProvider = document.querySelector("#immersiveFallbackProvider");
-  const immersiveGoogleApiKey = document.querySelector("#immersiveGoogleApiKey");
   const llmSentenceSegmentationEnabled = document.querySelector("#llmSentenceSegmentationEnabled");
   const asrCorrectionEnabled = document.querySelector("#asrCorrectionEnabled");
   const showOriginalTechnicalTerms = document.querySelector("#showOriginalTechnicalTerms");
@@ -36,7 +35,6 @@
   const detailFetchModels = document.querySelector("#detail-fetch-models");
   const BUILTIN_FREE = "builtin:google-free";
   const BUILTIN_BING = "builtin:bing-free";
-  const BUILTIN_CLOUD = "builtin:google-cloud";
   const dialog = document.querySelector("#service-dialog");
   const dialogTitle = document.querySelector("#service-dialog-title");
   const serviceName = document.querySelector("#service-name");
@@ -90,15 +88,10 @@
     const settings = await storageGet(Core.DEFAULT_SETTINGS);
     hydrateTranslationServices(settings);
 
-    if (immersiveFallbackProvider && immersiveGoogleApiKey) {
-      immersiveFallbackProvider.value = settings.immersiveFallbackProvider || "off";
-      immersiveGoogleApiKey.value = settings.immersiveGoogleApiKey || "";
-      const updateFallbackFields = () => {
-        immersiveGoogleApiKey.closest("label").hidden = immersiveFallbackProvider.value !== "google-cloud";
-        renderServiceList();
-      };
-      updateFallbackFields();
-      immersiveFallbackProvider.addEventListener("change", updateFallbackFields);
+    if (immersiveFallbackProvider) {
+      immersiveFallbackProvider.value = settings.immersiveFallbackProvider === "google-cloud"
+        ? "off" : settings.immersiveFallbackProvider || "off";
+      immersiveFallbackProvider.addEventListener("change", renderServiceList);
     }
 
     if (llmSentenceSegmentationEnabled) {
@@ -266,7 +259,7 @@
       return;
     }
 
-    if (!serviceById(editor.selectedServiceId) && ![BUILTIN_FREE, BUILTIN_BING, BUILTIN_CLOUD].includes(editor.selectedServiceId)) {
+    if (!serviceById(editor.selectedServiceId) && ![BUILTIN_FREE, BUILTIN_BING].includes(editor.selectedServiceId)) {
       editor.selectedServiceId = editor.translationServiceId || BUILTIN_FREE;
     }
     const scroll = document.querySelector(".services-scroll");
@@ -286,7 +279,6 @@
     const fallback = immersiveFallbackProvider.value;
     priorityServiceList.appendChild(buildServiceEntry(BUILTIN_FREE, "谷歌翻译", fallback === "google-free" ? "兜底 · 已启用" : "兜底 · 免 Key"));
     priorityServiceList.appendChild(buildServiceEntry(BUILTIN_BING, "Bing 翻译", fallback === "bing-free" ? "兜底 · 已启用" : "兜底 · 免 Key"));
-    priorityServiceList.appendChild(buildServiceEntry(BUILTIN_CLOUD, "Google Cloud Translation", fallback === "google-cloud" ? "兜底 · 已启用" : "兜底 · 官方 API"));
     if (serviceEmpty) {
       serviceEmpty.hidden = otherCount > 0;
     }
@@ -317,19 +309,16 @@
   function renderServiceDetail() {
     const service = serviceById(editor.selectedServiceId);
     const bing = editor.selectedServiceId === BUILTIN_BING;
-    const cloud = editor.selectedServiceId === BUILTIN_CLOUD;
     if (detail.dataset.serviceId !== editor.selectedServiceId) detail.scrollTop = 0;
     detail.dataset.serviceId = editor.selectedServiceId;
-    document.querySelector("#detail-name").textContent = service ? service.name || "未命名供应方" : cloud ? "Google Cloud Translation" : bing ? "Bing 翻译" : "谷歌翻译";
+    document.querySelector("#detail-name").textContent = service ? service.name || "未命名供应方" : bing ? "Bing 翻译" : "谷歌翻译";
     document.querySelector("#detail-kind").textContent = service ? "自定义供应方" : "内置兜底服务";
     document.querySelector("#detail-actions").hidden = !service;
     document.querySelector("#detail-connection").hidden = !service;
     document.querySelector("#detail-model-catalog").hidden = !service;
     document.querySelector("#detail-description").textContent = service
       ? "在此修改密钥和 API 地址；点击编辑维护名称与模型目录。"
-      : cloud
-        ? "用于网页翻译兜底，在“沉浸式翻译”页选择启用。使用 Google Cloud 官方 API Key，请求可能产生费用。"
-        : bing
+      : bing
           ? "使用 Bing 网页翻译免 Key 接口作为网页翻译兜底。接口非官方，可能限流或失效。"
           : "使用 Google 网页翻译免 Key 接口作为网页翻译兜底。接口非官方，可能限流或失效。";
     detailApiKey.value = service ? service.apiKey : "";
@@ -860,10 +849,6 @@
     detailApiKey?.addEventListener("input", () => {
       const service = serviceById(editor.selectedServiceId);
       if (service) service.apiKey = detailApiKey.value.trim();
-      else if (editor.selectedServiceId === BUILTIN_CLOUD) immersiveGoogleApiKey.value = detailApiKey.value;
-    });
-    immersiveGoogleApiKey?.addEventListener("input", () => {
-      if (editor.selectedServiceId === BUILTIN_CLOUD) detailApiKey.value = immersiveGoogleApiKey.value;
     });
     detailBaseUrl?.addEventListener("input", () => {
       const service = serviceById(editor.selectedServiceId);
@@ -1007,7 +992,6 @@
       immersiveTranslationModel: dedicatedImmersive ? immersiveModelId : "",
       immersiveTranslationJsonResponse: dedicatedImmersive ? readChecked(immersiveTranslationJsonResponse, true) : true,
       immersiveFallbackProvider: readValue(immersiveFallbackProvider, "off"),
-      immersiveGoogleApiKey: readValue(immersiveGoogleApiKey, "").trim(),
       llmSentenceSegmentationEnabled: readChecked(llmSentenceSegmentationEnabled, true),
       asrCorrectionEnabled: readChecked(asrCorrectionEnabled, true),
       showOriginalTechnicalTerms: readChecked(showOriginalTechnicalTerms, true),
@@ -1021,6 +1005,7 @@
     saveQueue = saveQueue.catch(() => {}).then(async () => {
       await storageSet(values);
       await storageRemove("deepseekApiKey");
+      await storageRemove("immersiveGoogleApiKey");
       showStatus("设置已自动保存。");
     }).catch(() => showStatus("保存失败，请检查扩展存储空间后重试。"));
     return saveQueue;

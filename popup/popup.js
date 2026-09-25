@@ -37,6 +37,17 @@
   async function init() {
     $("#version").textContent = `v${chrome.runtime.getManifest().version}`;
     settings = await api((done) => chrome.storage.local.get(Core.DEFAULT_SETTINGS, done));
+    const migratedSettings = {};
+    if (settings.immersiveTranslationService === "google-cloud") {
+      settings.immersiveTranslationService = migratedSettings.immersiveTranslationService = "ai";
+    }
+    if (settings.immersiveFallbackProvider === "google-cloud") {
+      settings.immersiveFallbackProvider = migratedSettings.immersiveFallbackProvider = "off";
+    }
+    if (Object.keys(migratedSettings).length) {
+      await api((done) => chrome.storage.local.set(migratedSettings, done));
+      await api((done) => chrome.storage.local.remove("immersiveGoogleApiKey", done));
+    }
     $("#source-language").value = settings.immersiveSourceLanguage;
     $("#target-language").value = settings.immersiveTargetLanguage || settings.targetLanguage;
     renderServices();
@@ -119,9 +130,9 @@
       select.appendChild(group);
     } else select.appendChild(new Option("自定义供应商 · 请先配置", "ai"));
     select.appendChild(new Option("Google 翻译 · 免 Key", "google-free"));
-    select.appendChild(new Option("Google Cloud Translation", "google-cloud"));
     const ai = settings.immersiveTranslationService === "ai";
-    select.value = ai && service ? `service:${service.id}` : settings.immersiveTranslationService;
+    const selectedService = ai ? (service ? `service:${service.id}` : "ai") : settings.immersiveTranslationService;
+    select.value = ["ai", "google-free"].includes(selectedService) || selectedService.startsWith("service:") ? selectedService : "ai";
     $("#model-field").hidden = !ai;
     const models = $("#translation-model");
     models.replaceChildren();

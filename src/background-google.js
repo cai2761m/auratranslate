@@ -90,9 +90,6 @@ async function translateGoogleCue(text, request, settings, deadline, hasFormatti
   if (settings.immersiveFallbackProvider === "bing-free") {
     return translateBingCue(text, request, deadline, hasFormatting);
   }
-  const cloud = settings.immersiveFallbackProvider === "google-cloud";
-  const apiKey = String(settings.immersiveGoogleApiKey || "").trim();
-  if (cloud && !apiKey) throw new Error("请填写 Google Cloud Translation API Key。");
   if (hasFormatting) restoreGoogleFormatting(text, text);
   const parts = googleParagraphChunks(text, hasFormatting).map((part) => {
     const [, before, content, after] = part.match(/^(\s*)([\s\S]*?)(\s*)$/);
@@ -101,40 +98,26 @@ async function translateGoogleCue(text, request, settings, deadline, hasFormatti
   for (const part of parts) {
     const batch = [part];
     const translations = await withGoogleSlot(async () => {
-      if (!cloud && Date.now() < googleFreeCooldownUntil) throw new Error("免 Key 接口暂不可用，冷却 60 秒后可手动重试，或切换官方接口。");
+      if (Date.now() < googleFreeCooldownUntil) throw new Error("免 Key 接口暂不可用，冷却 60 秒后可手动重试。");
       const remaining = deadline - Date.now();
       if (remaining <= 0) throw new Error("兜底处理时间已用完，请手动重试剩余段落。");
       const source = request.sourceLanguage || "auto";
       const target = request.targetLanguage || "zh-CN";
-      let url;
-      let options;
-      if (cloud) {
-        url = "https://translation.googleapis.com/language/translate/v2";
-        options = {
-          method: "POST", credentials: "omit", referrerPolicy: "no-referrer",
-          headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
-          body: JSON.stringify({ q: batch.map((part) => part.text), target, format: "text", model: "nmt",
-            ...(source === "auto" ? {} : { source }) })
-        };
-      } else {
-        url = `https://translate.googleapis.com/translate_a/single?client=gtx&dt=t&sl=${encodeURIComponent(source)}&tl=${encodeURIComponent(target)}&q=${encodeURIComponent(batch[0].text)}`;
-        options = { credentials: "omit", referrerPolicy: "no-referrer" };
-      }
+      const url = `https://translate.googleapis.com/translate_a/single?client=gtx&dt=t&sl=${encodeURIComponent(source)}&tl=${encodeURIComponent(target)}&q=${encodeURIComponent(batch[0].text)}`;
+      const options = { credentials: "omit", referrerPolicy: "no-referrer" };
       try {
-        const { response, bodyText } = await fetchWithTimeout(url, options, Math.min(15000, remaining), cloud);
-        if (!response.ok) throw new Error(`Google ${cloud ? "Cloud" : "免 Key"} 请求失败 (${response.status})。${response.status === 429 ? "已被限流。" : "请检查网络、Key、API 权限和额度。"}`);
+        const { response, bodyText } = await fetchWithTimeout(url, options, Math.min(15000, remaining), false);
+        if (!response.ok) throw new Error(`Google 免 Key 请求失败 (${response.status})。${response.status === 429 ? "已被限流。" : "请检查网络连接。"}`);
         let body;
         try { body = JSON.parse(bodyText); }
         catch { throw new Error("Google 返回了无效 JSON。"); }
-        const values = cloud
-          ? body?.data?.translations?.map((entry) => entry?.translatedText)
-          : [Array.isArray(body?.[0]) ? body[0].map((entry) => typeof entry?.[0] === "string" ? entry[0] : "").join("") : ""];
+        const values = [Array.isArray(body?.[0]) ? body[0].map((entry) => typeof entry?.[0] === "string" ? entry[0] : "").join("") : ""];
         if (!Array.isArray(values) || values.length !== batch.length || values.some((value) => typeof value !== "string" || !value.trim())) {
           throw new Error("Google 返回了空译文或不完整结果。");
         }
-        return values.map((value) => cloud ? decodeGoogleEntities(value) : value);
+        return values;
       } catch (error) {
-        if (!cloud) googleFreeCooldownUntil = Date.now() + 60000;
+        googleFreeCooldownUntil = Date.now() + 60000;
         throw error;
       }
     });
@@ -142,13 +125,4 @@ async function translateGoogleCue(text, request, settings, deadline, hasFormatti
   }
   const translated = parts.map((part) => `${part.before}${part.text}${part.after}`).join("");
   return hasFormatting ? restoreGoogleFormatting(text, translated) : translated;
-}
-
-function decodeGoogleEntities(text) {
-  const named = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: "\u00a0" };
-  return text.replace(/&(#x[\da-f]+|#\d+|amp|lt|gt|quot|apos|nbsp);/gi, (match, entity) => {
-    if (entity[0] !== "#") return named[entity.toLowerCase()] || match;
-    const value = entity[1].toLowerCase() === "x" ? parseInt(entity.slice(2), 16) : Number(entity.slice(1));
-    return value >= 0 && value <= 0x10ffff ? String.fromCodePoint(value) : match;
-  });
 }

@@ -148,7 +148,7 @@ test('popup switches provider and model used by webpage requests without changin
 
 test('Google services hide models and returning to the custom provider keeps its model', async (t) => {
   const ui = await popup(t,{...catalog,immersiveTranslationServiceId:'alpha',immersiveTranslationModelId:'accurate'});
-  for (const service of ['google-free','google-cloud']) {
+  for (const service of ['google-free']) {
     await change(ui,'#translation-service',service);
     assert.equal(ui.$('#model-field').hidden,true);
     assert.equal(ui.$('#translation-model').disabled,true);

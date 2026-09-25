@@ -63,12 +63,12 @@ The **实时字幕** and **沉浸式翻译** pages then only pick from that list
 
 Settings saved by older versions are migrated automatically: opening the settings page turns the single legacy API configuration into one provider entry without losing the key, address or model.
 
-The **Google 翻译兜底** (Google fallback) selector is off by default. It provides two optional fallbacks for webpages:
+The **Google 翻译兜底** (Google fallback) selector is off by default. It provides two optional, keyless fallbacks for webpages:
 
 - **Google 翻译（免 Key，可能限流）** uses an unofficial, keyless endpoint without Cloud API billing. It may be rate limited, blocked by your network, changed, or withdrawn; availability is not guaranteed.
-- **Google Cloud Translation（官方 API）** uses the official Basic v2 NMT API. Enter a separate Cloud Translation API key, enable the API, and [enable billing](https://docs.cloud.google.com/translate/docs/setup). This is not a Gemini key. The first 500,000 characters per month have a free allowance; additional usage is charged under [Google's pricing](https://cloud.google.com/products/translate/pricing). The extension does not track or cap that allowance.
+- **Bing 翻译（免 Key，可能限流）** uses a public webpage endpoint without a key. It may be limited or unavailable.
 
-With fallback enabled, cached translations load first. If the primary API is unconfigured, fails, or omits paragraphs, only missing text is sent to the selected Google service. The primary API gets one attempt per batch before fallback; a timed-out primary request may already have been billed, and official Google fallback may add a separate charge. Google requests are not automatically retried. Successful paragraphs are cached even if later paragraphs fail; changing or disabling fallback keeps existing cached translations. To replace cached output, clear the translation cache (this can cause new charges).
+With fallback enabled, cached translations load first. If the primary API is unconfigured, fails, or omits paragraphs, only missing text is sent to the selected service. The primary API gets one attempt per batch before fallback; a timed-out primary request may already have been billed. Fallback requests are not automatically retried. Successful paragraphs are cached even if later paragraphs fail; changing or disabling fallback keeps existing cached translations.
 
 Google translates complete paragraphs with inline formatting markers, so code, links, and emphasis do not split a sentence into separate translation requests. The extension validates the returned markers, restores code identifiers exactly, and rebuilds the original formatting locally in the translated word order. Missing or damaged markers produce an error instead of a broken cached translation; no automatic retry is made. Oversized paragraphs are split outside formatting, preferably at sentence boundaries, with a 4,000-code-point request limit. A single formatting region exceeding that limit requires AI translation.
 
@@ -82,7 +82,7 @@ Click **保存设置** (Save settings). The extension does not include an API ke
 
 **Google Drive:** open a video that exposes a transcript. AuraTranslate briefly opens the transcript panel to read timestamped text, restores the panel, and displays bilingual subtitles inside the embedded player.
 
-**Webpages:** choose source language, target language and service in the extension popup, then click **翻译当前网页** (Translate current page), or use the floating button. Webpage translation defaults to automatic source detection and Simplified Chinese; popup language choices are independent of subtitle languages. The AI option displays the configured model. Selecting Google uses it directly; Cloud requires its separate API key in Settings. Visible paragraphs are prioritized and matching cached translations are reused.
+**Webpages:** choose source language, target language and service in the extension popup, then click **翻译当前网页** (Translate current page), or use the floating button. Webpage translation defaults to automatic source detection and Simplified Chinese; popup language choices are independent of subtitle languages. The AI option displays the configured model. Visible paragraphs are prioritized and matching cached translations are reused.
 
 The icon beside Translate switches between bilingual and translation-only display without new translation requests. Pending or failed paragraphs retain their original text. **更多功能** (More) contains per-host rules: follow global, always auto-translate, or never auto-translate. Site rules override the global automatic translation switch, which is off by default. Popup preferences save immediately; the bottom gear opens full settings.
 
@@ -142,7 +142,7 @@ An installed signed extension needs an updated signed package. Pulling GitHub ch
 
 Translation sends selected caption or webpage text to the API endpoint you configure. LLM sentence segmentation also sends caption text to that endpoint. API keys are stored in browser extension local storage; the project does not add encryption for stored keys. The password input masks the key on screen only.
 
-Enabling Google fallback also allows missing webpage text to be sent to `translate.googleapis.com` (keyless) or `translation.googleapis.com` (official Cloud). Fallback requests omit browser cookies; the Cloud key is sent only to the official endpoint, independently of the AI API key.
+Enabling a keyless fallback allows missing webpage text to be sent to the selected provider's public translation endpoint. Fallback requests omit browser cookies.
 
 The current source does not include a separate AuraTranslate account service or analytics endpoint. Your API provider handles the text you send under its own data policies.
 

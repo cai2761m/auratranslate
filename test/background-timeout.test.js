@@ -76,18 +76,18 @@ test("an uncertain AI timeout switches to free Google exactly once without repla
   assert.equal(f.timers.size, 0);
 });
 
-test("both Google modes bound stalled response bodies and never retry", async (t) => {
-  for (const mode of ["google-free", "google-cloud"]) {
+test("Google fallback bounds stalled response bodies and never retries", async (t) => {
+  for (const mode of ["google-free"]) {
     await t.test(mode, async () => {
       const f = fixture(true);
       const result = f.context.translateImmersiveWithFallback({
         translationConfig: Core.resolveTranslationConfig(Core.DEFAULT_SETTINGS),
         sourceLanguage: "en", targetLanguage: "zh-CN", mode: "immersive",
         cues: [{ id: "1", sourceText: "An English paragraph." }]
-      }, { immersiveFallbackProvider: mode, immersiveGoogleApiKey: "cloud-key" }, async () => {});
+      }, { immersiveFallbackProvider: mode }, async () => {});
       const rejected = assert.rejects(result, (error) => {
         assert.match(error.message, /Google 兜底失败.*超时/);
-        assert.equal(error.requestMayHaveReachedProvider, mode === "google-cloud");
+        assert.equal(error.requestMayHaveReachedProvider, false);
         return true;
       });
       await new Promise((resolve) => setImmediate(resolve));
