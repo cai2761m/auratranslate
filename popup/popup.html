@@ -31,9 +31,13 @@
     </div>
     <label class="select-field service-field"><span>翻译服务</span>
       <select id="translation-service" disabled aria-label="翻译服务">
-        <option value="ai">AI 翻译</option><option value="google-free">Google 翻译 · 免 Key</option>
+        <option value="ai">自定义供应商</option><option value="google-free">Google 翻译 · 免 Key</option>
         <option value="google-cloud">Google Cloud Translation</option>
       </select>
+    </label>
+    <label id="model-field" class="select-field service-field" hidden><span>模型</span>
+      <select id="translation-model" disabled aria-label="模型"></select>
+      <small id="model-hint" class="model-hint"></small>
     </label>
     <div class="translate-actions">
       <button id="display-mode-toggle" class="mode-toggle" type="button" disabled aria-label="切换为仅译文" title="双语对照 · 点击切换为仅译文"><span id="mode-icon" aria-hidden="true">文/A</span></button>

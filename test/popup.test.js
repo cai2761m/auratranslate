@@ -38,7 +38,8 @@ test('popup restores language, concrete AI model and saved modes, and expands mo
   const { $, settings } = await popup(t, {translationModel:'my-model',immersiveDisplayMode:'translation'});
   assert.equal($('#source-language').value,'auto');
   assert.equal($('#target-language').value,'zh-CN');
-  assert.match($('#translation-service option').textContent,/my-model/);
+  assert.equal($('#translation-service optgroup').label,'自定义供应商');
+  assert.equal($('#translation-model').value,'my-model');
   assert.equal($('#version').textContent,'v0.3.12');
   assert.equal($('#more-panel').hidden,true);
   $('#more-toggle').click();
@@ -100,8 +101,97 @@ test('failed saves roll back selected values and surface a recoverable error', a
 });
 
 test('running translations disable duplicate starts and language changes but retain mode switching', async (t) => {
-  const {$} = await popup(t,{}, {running:true});
+  const {$} = await popup(t,{translationModel:'my-model'}, {running:true});
   assert.equal($('#translate-page').disabled,true);
   assert.equal($('#source-language').disabled,true);
+  assert.equal($('#translation-model').disabled,true);
   assert.equal($('#display-mode-toggle').disabled,false);
+});
+
+const catalog = {
+  translationServices: [
+    {id:'alpha',name:'供应商 A',baseUrl:'https://alpha.test/v1',apiKey:'key-a',models:[{id:'fast',displayName:'快速'},{id:'accurate'}]},
+    {id:'beta',name:'供应商 B',baseUrl:'https://beta.test/v1',apiKey:'key-b',models:[{id:'other'}]},
+    {id:'empty',name:'待配置',models:[]}
+  ],
+  translationServiceId:'alpha',translationModelId:'fast',translationJsonResponse:false
+};
+async function change(ui, selector, value) {
+  ui.$(selector).value = value;
+  ui.$(selector).dispatchEvent(new ui.window.Event('change'));
+  await tick();
+}
+
+test('popup switches provider and model used by webpage requests without changing subtitle selection', async (t) => {
+  const ui = await popup(t,catalog);
+  assert.equal(ui.$('#translation-service').value,'service:alpha');
+  assert.equal(ui.$('#translation-model option').textContent,'fast · 快速');
+  await change(ui,'#translation-model','accurate');
+  let config = Core.resolveTranslationConfig(ui.settings,'immersive');
+  assert.equal(config.model,'accurate');
+  assert.equal(config.apiKey,'key-a');
+  assert.equal(config.useJsonResponseFormat,false);
+  assert.equal(Core.resolveTranslationConfig(ui.settings).model,'fast');
+  await change(ui,'#translation-service','service:beta');
+  config = Core.resolveTranslationConfig(ui.settings,'immersive');
+  assert.equal(config.apiKey,'key-b');
+  assert.equal(config.chatCompletionsUrl,'https://beta.test/v1/chat/completions');
+  assert.equal(config.model,'other');
+  assert.equal(ui.$('#translation-model').options.length,1);
+  assert.equal(ui.settings.immersiveTranslationModel,'other');
+  assert.equal(Core.resolveTranslationConfig(ui.settings).apiKey,'key-a');
+  const reopened = await popup(t,ui.settings);
+  assert.equal(reopened.$('#translation-service').value,'service:beta');
+  assert.equal(reopened.$('#translation-model').value,'other');
+  assert.ok(ui.messages.every(message => message.type === 'IMMERSIVE_POPUP_STATUS'));
+});
+
+test('Google services hide models and returning to the custom provider keeps its model', async (t) => {
+  const ui = await popup(t,{...catalog,immersiveTranslationServiceId:'alpha',immersiveTranslationModelId:'accurate'});
+  for (const service of ['google-free','google-cloud']) {
+    await change(ui,'#translation-service',service);
+    assert.equal(ui.$('#model-field').hidden,true);
+    assert.equal(ui.$('#translation-model').disabled,true);
+  }
+  await change(ui,'#translation-service','service:alpha');
+  assert.equal(ui.$('#model-field').hidden,false);
+  assert.equal(ui.$('#translation-model').value,'accurate');
+});
+
+test('empty catalogs explain how to add a model and disable the model picker', async (t) => {
+  const empty = await popup(t);
+  assert.match(empty.$('#model-hint').textContent,/添加供应商和模型/);
+  assert.equal(empty.$('#translation-model').disabled,true);
+  const ui = await popup(t,catalog);
+  await change(ui,'#translation-service','service:empty');
+  assert.equal(ui.$('#translation-model').disabled,true);
+  assert.match(ui.$('#model-hint').textContent,/为此供应商添加模型/);
+  assert.equal(Core.resolveTranslationConfig(ui.settings,'immersive').model,'');
+});
+
+test('failed provider and model changes restore the saved effective configuration', async (t) => {
+  const ui = await popup(t,catalog,{saveError:true});
+  await change(ui,'#translation-service','service:beta');
+  assert.equal(ui.$('#translation-service').value,'service:alpha');
+  assert.equal(ui.$('#translation-model').value,'fast');
+  await change(ui,'#translation-model','accurate');
+  assert.equal(ui.$('#translation-model').value,'fast');
+  assert.equal(Core.resolveTranslationConfig(ui.settings,'immersive').model,'fast');
+  assert.match(ui.$('#status').textContent,/保存失败/);
+});
+
+test('choosing a legacy provider persists its catalog and retains credentials and subtitle model', async (t) => {
+  const ui = await popup(t,{translationProvider:'custom',translationBaseUrl:'https://legacy.test/v1',translationApiKey:'legacy-key',translationModel:'legacy-model'});
+  assert.equal(ui.settings.translationServices.length,0);
+  await change(ui,'#translation-service','service:legacy-realtime');
+  assert.equal(ui.settings.translationServices.length,1);
+  assert.equal(Core.resolveTranslationConfig(ui.settings,'immersive').apiKey,'legacy-key');
+  assert.equal(Core.resolveTranslationConfig(ui.settings).model,'legacy-model');
+});
+
+test('stale service selections display the same fallback model used by translation requests', async (t) => {
+  const ui = await popup(t,{...catalog,translationServiceId:'deleted',translationModelId:'accurate',immersiveTranslationServiceId:'also-deleted'});
+  assert.equal(ui.$('#translation-service').value,'service:alpha');
+  assert.equal(ui.$('#translation-model').value,Core.resolveTranslationConfig(ui.settings,'immersive').model);
+  assert.equal(ui.$('#translation-model').value,'accurate');
 });

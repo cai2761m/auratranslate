@@ -37,11 +37,9 @@
   async function init() {
     $("#version").textContent = `v${chrome.runtime.getManifest().version}`;
     settings = await api((done) => chrome.storage.local.get(Core.DEFAULT_SETTINGS, done));
-    const config = Core.resolveTranslationConfig(settings, "immersive");
-    $("#translation-service option[value='ai']").textContent = `AI 翻译 · ${config.model || "请先配置模型"}`;
     $("#source-language").value = settings.immersiveSourceLanguage;
     $("#target-language").value = settings.immersiveTargetLanguage || settings.targetLanguage;
-    $("#translation-service").value = settings.immersiveTranslationService;
+    renderServices();
     $("#subtitle-enabled-toggle").checked = settings.subtitleEnabled !== false;
     $("#auto-translate-toggle").checked = settings.immersiveAutoTranslate === true;
     renderMode();
@@ -59,7 +57,15 @@
     pageStatus();
     $("#source-language").addEventListener("change", (event) => save({ immersiveSourceLanguage: event.target.value }));
     $("#target-language").addEventListener("change", (event) => save({ immersiveTargetLanguage: event.target.value }));
-    $("#translation-service").addEventListener("change", (event) => save({ immersiveTranslationService: event.target.value }));
+    $("#translation-service").addEventListener("change", (event) => {
+      const value = event.target.value;
+      if (value.startsWith("service:")) saveService(value.slice(8));
+      else save({ immersiveTranslationService: value });
+    });
+    $("#translation-model").addEventListener("change", (event) => {
+      const { service } = serviceSelection();
+      if (service) saveService(service.id, event.target.value);
+    });
     $("#subtitle-enabled-toggle").addEventListener("change", (event) => save({ subtitleEnabled: event.target.checked }));
     $("#auto-translate-toggle").addEventListener("change", (event) => save({ immersiveAutoTranslate: event.target.checked }));
     $("#display-mode-toggle").addEventListener("click", () => saveMode(settings.immersiveDisplayMode === "translation" ? "bilingual" : "translation"));
@@ -91,9 +97,69 @@
       } catch (_) { /* Keep the last useful status when a tab closes. */ }
     }, 1000);
   }
+  function serviceSelection() {
+    const plan = Core.planTranslationServices(settings);
+    const dedicated = Core.findTranslationService(plan.services, plan.immersiveTranslationServiceId);
+    const service = dedicated || Core.findTranslationService(plan.services, plan.translationServiceId) || plan.services[0];
+    return {
+      plan, service,
+      model: Core.pickModelId(service, plan.migrated
+        ? (dedicated ? plan.immersiveTranslationModelId : plan.translationModelId)
+        : (dedicated ? settings.immersiveTranslationModelId : settings.translationModelId))
+    };
+  }
+  function renderServices() {
+    const { plan, service, model } = serviceSelection();
+    const select = $("#translation-service");
+    select.replaceChildren();
+    if (plan.services.length) {
+      const group = document.createElement("optgroup");
+      group.label = "自定义供应商";
+      for (const item of plan.services) group.appendChild(new Option(item.name || "自定义供应商", `service:${item.id}`));
+      select.appendChild(group);
+    } else select.appendChild(new Option("自定义供应商 · 请先配置", "ai"));
+    select.appendChild(new Option("Google 翻译 · 免 Key", "google-free"));
+    select.appendChild(new Option("Google Cloud Translation", "google-cloud"));
+    const ai = settings.immersiveTranslationService === "ai";
+    select.value = ai && service ? `service:${service.id}` : settings.immersiveTranslationService;
+    $("#model-field").hidden = !ai;
+    const models = $("#translation-model");
+    models.replaceChildren();
+    for (const item of service?.models || []) {
+      models.appendChild(new Option(item.displayName ? `${item.id} · ${item.displayName}` : item.id, item.id));
+    }
+    if (!models.options.length) models.appendChild(new Option("尚未添加模型", ""));
+    models.value = model;
+    $("#model-hint").textContent = !service ? "请在设置 → 翻译服务中添加供应商和模型。"
+      : !model ? "请在设置 → 翻译服务中为此供应商添加模型。" : "";
+    $("#model-hint").hidden = Boolean(model);
+  }
+  function saveService(id, requestedModel) {
+    const { plan, service: current, model } = serviceSelection();
+    const service = Core.findTranslationService(plan.services, id);
+    if (!service) return;
+    const modelId = Core.pickModelId(service, requestedModel ?? (current?.id === id ? model : ""));
+    return save({
+      // Persist on-the-fly legacy migration only when the user makes a choice.
+      ...(plan.migrated ? {
+        translationServices: plan.services,
+        translationServiceId: plan.translationServiceId,
+        translationModelId: plan.translationModelId
+      } : {}),
+      immersiveTranslationService: "ai",
+      immersiveTranslationServiceId: id,
+      immersiveTranslationModelId: modelId,
+      immersiveTranslationProvider: "custom",
+      immersiveTranslationApiKey: service.apiKey,
+      immersiveTranslationBaseUrl: service.baseUrl,
+      immersiveTranslationModel: modelId,
+      immersiveTranslationJsonResponse: Core.resolveTranslationConfig(settings, "immersive").useJsonResponseFormat
+    });
+  }
   function renderControls() {
     const running = page?.mode === "translating";
     for (const selector of ["#source-language", "#target-language", "#translation-service"]) $(selector).disabled = saving || running;
+    $("#translation-model").disabled = saving || running || settings.immersiveTranslationService !== "ai" || !serviceSelection().model;
     for (const selector of ["#display-mode-toggle", "#display-controls", "#auto-translate-toggle", "#subtitle-enabled-toggle"]) $(selector).disabled = saving;
     $("#site-controls").disabled = saving || !hostname;
     $("#translate-page").disabled = saving || running || !page?.ok;
@@ -131,7 +197,7 @@
     finally {
       $("#source-language").value = settings.immersiveSourceLanguage;
       $("#target-language").value = settings.immersiveTargetLanguage || settings.targetLanguage;
-      $("#translation-service").value = settings.immersiveTranslationService;
+      renderServices();
       $("#subtitle-enabled-toggle").checked = settings.subtitleEnabled !== false;
       $("#auto-translate-toggle").checked = settings.immersiveAutoTranslate === true;
       renderMode();
