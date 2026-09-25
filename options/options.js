@@ -324,6 +324,7 @@
     document.querySelector("#detail-kind").textContent = service ? "自定义供应方" : "内置兜底服务";
     document.querySelector("#detail-actions").hidden = !service;
     document.querySelector("#detail-connection").hidden = !service;
+    document.querySelector("#detail-model-catalog").hidden = !service;
     document.querySelector("#detail-description").textContent = service
       ? "在此修改密钥和 API 地址；点击编辑维护名称与模型目录。"
       : cloud
@@ -369,10 +370,10 @@
       item.append(id, name, remove);
       list.appendChild(item);
     }
-    if (!list.children.length) {
+    if (service && !list.children.length) {
       const empty = document.createElement("li");
       empty.className = "model-empty";
-      empty.textContent = service ? "暂无模型，可添加模型或获取模型列表。" : "此服务无需选择模型。";
+      empty.textContent = "暂无模型，可添加模型或获取模型列表。";
       list.appendChild(empty);
     }
   }

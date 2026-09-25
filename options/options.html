@@ -80,9 +80,11 @@
                     <label class="field"><span>API 地址</span><input id="detail-base-url" type="url" autocomplete="off" placeholder="https://api.example.com/v1"></label>
                     <label class="field"><span>API 协议</span><input id="detail-protocol" type="text" readonly></label>
                   </div>
-                  <div class="model-catalog-heading"><h4>模型列表 <span id="detail-model-count"></span></h4><div class="inline-actions"><button type="button" id="detail-add-model" class="ghost">添加模型</button><button type="button" id="detail-fetch-models" class="ghost">获取模型列表</button></div></div>
-                  <ul class="detail-models" id="detail-models"></ul>
-                  <p class="model-status" id="detail-model-status" role="status"></p>
+                  <div id="detail-model-catalog" hidden>
+                    <div class="model-catalog-heading"><h4>模型列表 <span id="detail-model-count"></span></h4><div class="inline-actions"><button type="button" id="detail-add-model" class="ghost">添加模型</button><button type="button" id="detail-fetch-models" class="ghost">获取模型列表</button></div></div>
+                    <ul class="detail-models" id="detail-models"></ul>
+                    <p class="model-status" id="detail-model-status" role="status"></p>
+                  </div>
                 </article>
               </div>
             </section>
