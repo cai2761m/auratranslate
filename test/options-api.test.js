@@ -231,13 +231,15 @@ function serviceFixture() {
   };
 }
 
-test("default and fallback services are grouped first, selection only changes the details", async (t) => {
+test("custom services stay in their group when selected as defaults", async (t) => {
   const storage = serviceFixture();
   const page = await openSettings(t, storage);
   const priority = page.field("priority-service-list");
   assert.deepEqual([...priority.querySelectorAll("[data-select-service]")].map((el) => el.dataset.selectService),
-    ["service-2", "builtin:google-free", "builtin:bing-free"]);
-  assert.equal(page.field("custom-service-list").children.length, 1);
+    ["builtin:google-free", "builtin:bing-free"]);
+  assert.deepEqual([...page.field("custom-service-list").querySelectorAll("[data-select-service]")].map((el) => el.dataset.selectService),
+    ["service-2", "service-1"]);
+  assert.match(page.document.querySelector('[data-select-service="service-2"]').textContent, /默认/);
   assert.equal(page.field("detail-name").textContent, "默认服务");
   page.document.querySelector('[data-select-service="service-1"]').click();
   assert.equal(page.field("detail-name").textContent, "备用服务");
@@ -256,7 +258,7 @@ test("default and fallback services are grouped first, selection only changes th
   assert.equal(storage.translationServiceId, "service-2");
   page.field("translationServiceId").value = "service-1";
   page.field("translationServiceId").dispatchEvent(new page.window.Event("change"));
-  assert.equal(priority.firstElementChild.dataset.selectService, "service-1");
+  assert.equal(page.document.querySelector('#custom-service-list [data-select-service="service-1"]').dataset.selectService, "service-1");
 });
 
 test("built-in fallback details do not expose editable credentials", async (t) => {

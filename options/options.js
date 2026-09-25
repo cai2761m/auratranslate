@@ -272,9 +272,8 @@
       const labels = [];
       if (service.id === editor.translationServiceId) labels.push("默认");
       if (service.id === editor.immersiveTranslationServiceId) labels.push("网页默认");
-      const target = labels.length ? priorityServiceList : serviceList;
-      target.appendChild(buildServiceEntry(service.id, service.name || "未命名供应方", labels.join(" · ") || `${service.models.length} 个模型`));
-      if (!labels.length) otherCount += 1;
+      serviceList.appendChild(buildServiceEntry(service.id, service.name || "未命名供应方", labels.join(" · ") || `${service.models.length} 个模型`));
+      otherCount += 1;
     }
     const fallback = immersiveFallbackProvider.value;
     priorityServiceList.appendChild(buildServiceEntry(BUILTIN_FREE, "谷歌翻译", fallback === "google-free" ? "兜底 · 已启用" : "兜底 · 免 Key"));
